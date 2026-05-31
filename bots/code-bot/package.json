@@ -1,0 +1,18 @@
+{
+  "name": "code-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Queued verification-code fetcher. Workers join the queue, the active one requests a code, the bot pulls it from the configured source.",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@platform/bot-core": "*"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

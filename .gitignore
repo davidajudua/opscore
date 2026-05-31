@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Secrets — NEVER commit real .env (templates are .env.example)
+.env
+**/.env
+
+# Runtime data + databases
+**/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store

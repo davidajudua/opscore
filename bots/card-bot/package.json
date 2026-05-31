@@ -1,0 +1,19 @@
+{
+  "name": "card-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Card pool + on-demand /card claim flow: providers, channel whitelist, load/export, and a live stock panel.",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node src/index.js",
+    "start": "node src/index.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@platform/bot-core": "*"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

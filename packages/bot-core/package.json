@@ -1,0 +1,36 @@
+{
+  "name": "@platform/bot-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared core for a multi-bot Discord platform — env, logger, Discord scaffolding, IMAP, SQLite, queue, HTTP, supervisor.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./env": "./src/env.js",
+    "./logger": "./src/logger.js",
+    "./discord": "./src/discord.js",
+    "./imap": "./src/imap.js",
+    "./db": "./src/db.js",
+    "./queue": "./src/queue.js",
+    "./http": "./src/http.js",
+    "./supervisor": "./src/supervisor.js"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "imapflow": "^1.0.171",
+    "mailparser": "^3.7.2",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "pino-roll": "^2.0.0",
+    "undici": "^6.20.1",
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

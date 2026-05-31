@@ -1,0 +1,19 @@
+{
+  "name": "payment-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Monitors Gmail inboxes for Zelle/Venmo/PayPal payments, records the ledger, and posts to Discord.",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node src/index.js",
+    "start": "node src/index.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@platform/bot-core": "*"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

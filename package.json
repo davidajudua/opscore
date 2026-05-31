@@ -1,0 +1,33 @@
+{
+  "name": "bot-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Discord automation platform — independent bots sharing a single Node core, managed under PM2.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "bots/*"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run test --workspaces --if-present",
+    "test:core": "npm test -w @platform/bot-core",
+    "dev:code": "npm run dev -w code-bot",
+    "dev:payment": "npm run dev -w payment-bot",
+    "dev:card": "npm run dev -w card-bot",
+    "start": "pm2 start pm2.config.cjs",
+    "stop": "pm2 stop pm2.config.cjs",
+    "restart": "pm2 restart pm2.config.cjs",
+    "logs": "pm2 logs",
+    "status": "pm2 status"
+  },
+  "devDependencies": {
+    "eslint": "^9.13.0",
+    "prettier": "^3.3.3"
+  }
+}
