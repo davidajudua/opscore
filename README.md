@@ -1,6 +1,6 @@
-# Discord Bot Platform
+# opscore
 
-**A small monorepo for running internal operations bots on Discord — one shared core, many single-purpose bots, managed under one process supervisor.**
+**An operations core: one shared Node runtime that powers a fleet of single-purpose internal-ops bots on Discord — one shared core, many bots, supervised under PM2.**
 
 Most "Discord bots" are one giant file that does everything and falls over on restart. This is the
 opposite: a thin, shared **core** (`@platform/bot-core`) handles the boring, easy-to-get-wrong parts
