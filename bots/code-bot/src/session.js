@@ -83,11 +83,14 @@ export function buildCodeView({ code, bot, userId, provider }) {
 export function buildTimeoutView(bot, { mention, provider } = {}) {
   const ping = mention ? `<@${mention}>\n` : '';
   const sourceLabel = provider === 'eno' ? 'Capital One' : 'Safekey';
+  // Eno's fetcher polls for 3 minutes (ENO.fetchTimeoutMs = 180_000); Amex is 60s.
+  // Keep this in sync with buildAutoTimeoutView's window.
+  const window = provider === 'eno' ? '3 minutes' : '60 seconds';
   const container = new ContainerBuilder()
     .setAccentColor(COLOR_TIMEOUT)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `${ping}### No code received\nNo matching ${sourceLabel} email arrived within 60 seconds.`,
+        `${ping}### No code received\nNo matching ${sourceLabel} email arrived within ${window}.`,
       ),
     )
     .addActionRowComponents(

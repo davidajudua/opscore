@@ -119,8 +119,12 @@ export const PROVIDERS = {
       const body = cleanText(msg.text || (msg.html ? msg.html.replace(/<[^>]+>/g, ' ') : ''));
       const haystack = `${subject}\n${body}`;
 
-      // Skip non-payment events.
-      if (/(?:refund|dispute|failed|declined|cancelled|canceled)/i.test(haystack)) return null;
+      // Skip non-payment events. Includes reversal/unauthorized notices, which use a
+      // genuine inbound phrasing ("received $X from …") but must NOT be booked as income.
+      // (Deliberately conservative: "pending"/"on hold" are NOT skipped here because they
+      // also appear in legitimate completed-payment emails and would drop real income.)
+      if (/(?:refund|dispute|failed|declined|cancelled|canceled|unauthorized|reversed|reversal)/i.test(haystack))
+        return null;
 
       // Inbound subject patterns first. Pattern 2 tolerates "You've" (straight or curly
       // apostrophe) and an optional ISO currency code between amount and "from", e.g.

@@ -102,7 +102,7 @@ export function getCodeButtonHandler({ db, bot, queues, fetchersByProvider, logg
  * are AbortController-cancelled. `hint` (for Eno's 3-char Google Pay code)
  * is forwarded to every fetcher; fetchers that don't need it ignore the arg.
  */
-async function raceFetchers(fetcherList, { clickTime, hint, logger }) {
+export async function raceFetchers(fetcherList, { clickTime, hint, logger }) {
   if (fetcherList.length === 0) return null;
   if (fetcherList.length === 1) {
     return fetcherList[0].fetchUntilDeadline({ clickTime, hint });

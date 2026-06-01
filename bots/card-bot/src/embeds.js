@@ -39,7 +39,7 @@ export function lowStockPayload({ provider, count, threshold }) {
     .setAccentColor(COLOR_WARN)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `### ⚠️ Low stock\n\`${provider}\` has **${count}** cards left.`,
+        `### ⚠️ Low stock\n\`${provider.name}\` has **${count}** cards left.`,
       ),
     );
   return v2Payload(container);
@@ -91,7 +91,7 @@ function buildCardActionRow(bot) {
 function cardContainer({ card, provider, accentColor }) {
   const expDate =
     card.mm && card.yy
-      ? `${card.mm}/${String(card.yy).length === 2 ? '20' + card.yy : card.yy}`
+      ? `${card.mm}/${Number(card.yy) < 100 ? '20' + String(card.yy).padStart(2, '0') : card.yy}`
       : (provider.exp_date ?? 'N/A');
   const zip = card.zip ?? provider.zip ?? 'N/A';
   const c = new ContainerBuilder()
@@ -181,7 +181,7 @@ export function workersStatsPageContainer({ bot, tab, sorted, pageIdx, prices })
     const r = sorted[safeIdx];
     const workerBlock =
       '```\n' +
-      `cards    ${padNum(r.cards, 4)}   ${pad(fmtMoney(r.cards * prices.card), 8)}\n` +
+      `cards    ${padNum(r.cards, 4)}   ${pad(fmtMoney(costOf(r)), 8)}\n` +
       `${'─'.repeat(26)}\n` +
       `total           ${pad(fmtMoney(costOf(r)), 8)}\n` +
       '```';

@@ -83,7 +83,13 @@ function getCached(key) {
 }
 
 function setCache(key, value, ttl) {
-  priceCache[key] = { value, time: Date.now(), ttl };
+  const now = Date.now();
+  // Sweep expired entries so historical-price keys (unique per timestamp) can't
+  // accumulate without bound in a long-running process.
+  for (const k in priceCache) {
+    if (now - priceCache[k].time > priceCache[k].ttl) delete priceCache[k];
+  }
+  priceCache[key] = { value, time: now, ttl };
 }
 
 async function getCurrentPrice(coin) {
@@ -173,14 +179,34 @@ function normList(addresses) {
   return addresses.filter(Boolean).map((a) => a.toLowerCase());
 }
 
+/**
+ * Confirmations for a BTC tx = (chain tip height − inclusion block height + 1).
+ * NOT the inclusion block height itself. Returns 0 when unconfirmed or when the
+ * tip height is unavailable. Pure function.
+ */
+export function btcConfirmations(tipHeight, blockHeight, confirmed) {
+  if (!confirmed || blockHeight == null) return 0;
+  if (!Number.isFinite(tipHeight)) return 0;
+  return Math.max(0, tipHeight - blockHeight + 1);
+}
+
 async function fetchBTC(hash, myAddresses) {
   const url = `https://mempool.space/api/tx/${hash}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`mempool.space BTC error ${res.status}`);
   const tx = await res.json();
 
+  // Fetch the current chain tip so confirmations are a real count, not the block height.
+  let tipHeight = null;
+  try {
+    const tipRes = await fetch('https://mempool.space/api/blocks/tip/height');
+    if (tipRes.ok) tipHeight = parseInt(await tipRes.text(), 10);
+  } catch {
+    /* tip unavailable → confirmations falls back to 0 */
+  }
+
   const timestamp = tx.status?.block_time ? tx.status.block_time * 1000 : Date.now();
-  const confirmations = tx.status?.confirmed ? (tx.status.block_height ?? 0) : 0;
+  const confirmations = btcConfirmations(tipHeight, tx.status?.block_height, tx.status?.confirmed);
 
   const outputs = tx.vout ?? [];
   const myNorms = normList(myAddresses);
@@ -226,7 +252,8 @@ async function fetchEVMBlockchair(blockchairChain, coin, nativeUnit, hash, myAdd
   const calls = txData.calls ?? [];
 
   const timestamp = tx.time ? new Date(tx.time + ' UTC').getTime() : null;
-  const confirmations = tx.block_id ? (json.context?.state ?? 0) - tx.block_id : 0;
+  // +1 so a freshly-mined tx reports 1 confirmation (matching btcConfirmations/evmConfirmations).
+  const confirmations = tx.block_id ? Math.max(0, (json.context?.state ?? 0) - tx.block_id + 1) : 0;
 
   let amountNative = (tx.value ?? 0) / 1e18;
   let toAddress = tx.recipient ?? 'Unknown';
@@ -352,6 +379,17 @@ async function rpcCall(rpcUrl, method, params) {
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
+/**
+ * Confirmations for an EVM tx. A pending tx has a null blockNumber → 0 confirmations
+ * (never NaN). Otherwise (currentBlock − inclusionBlock + 1). Pure function.
+ */
+export function evmConfirmations(currentBlock, txBlockNumberHex) {
+  if (txBlockNumberHex == null) return 0;
+  const txBlock = parseInt(txBlockNumberHex, 16);
+  if (!Number.isFinite(currentBlock) || !Number.isFinite(txBlock)) return 0;
+  return Math.max(0, currentBlock - txBlock + 1);
+}
+
 async function fetchEVMRpc(coin, hash, myAddresses) {
   const chain = EVM_RPC_CHAINS[coin];
   if (!chain) throw new Error(`No RPC config for ${coin}`);
@@ -368,11 +406,16 @@ async function fetchEVMRpc(coin, hash, myAddresses) {
   if (!tx) throw new Error('Transaction not found.');
 
   const currentBlock = parseInt(blockNumRes.result, 16);
-  const txBlock = parseInt(tx.blockNumber, 16);
-  const confirmations = currentBlock - txBlock;
+  // Pending transactions have a null blockNumber — guard so confirmations is 0,
+  // not NaN, and skip the (invalid) block lookup for a null block number.
+  const isPending = tx.blockNumber == null;
+  const confirmations = evmConfirmations(currentBlock, tx.blockNumber);
 
-  const blockRes = await rpcCall(chain.rpcUrl, 'eth_getBlockByNumber', [tx.blockNumber, false]);
-  const timestamp = blockRes.result?.timestamp ? parseInt(blockRes.result.timestamp, 16) * 1000 : null;
+  let timestamp = null;
+  if (!isPending) {
+    const blockRes = await rpcCall(chain.rpcUrl, 'eth_getBlockByNumber', [tx.blockNumber, false]);
+    timestamp = blockRes.result?.timestamp ? parseInt(blockRes.result.timestamp, 16) * 1000 : null;
+  }
 
   let amountNative = parseInt(tx.value, 16) / 1e18;
   let toAddress = tx.to || 'Unknown';
@@ -456,7 +499,13 @@ export function extractSolNativeTransfer(tx, myAddresses) {
   for (const myAddr of myAddresses.filter(Boolean)) {
     const idx = accounts.findIndex((a) => (typeof a === 'string' ? a : a.pubkey) === myAddr);
     if (idx !== -1 && post[idx] !== undefined && pre[idx] !== undefined) {
-      return { amountNative: (post[idx] - pre[idx]) / 1e9, unit: 'SOL', toAddress: myAddr };
+      const delta = post[idx] - pre[idx];
+      // Only an INBOUND transfer (balance increased) counts as income. If our
+      // address is the sender, delta is negative — skip and fall through to the
+      // largest positive delta (the real recipient) instead of reporting a negative.
+      if (delta > 0) {
+        return { amountNative: delta / 1e9, unit: 'SOL', toAddress: myAddr };
+      }
     }
   }
 
@@ -717,6 +766,7 @@ export function buildAddressIndex(env) {
     ETH: env.CRYPTO_ADDRESS_ETH || '',
     LTC: env.CRYPTO_ADDRESS_LTC || '',
     SOL: env.CRYPTO_ADDRESS_SOL || '',
+    TRX: env.CRYPTO_ADDRESS_TRX || '',
   };
   const addressSet = {};
   const coinAddresses = {};

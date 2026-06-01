@@ -103,20 +103,31 @@ export function supervise({
     }
   };
 
-  loop();
-  return { stop, signal: ac.signal };
+  // Capture the loop promise so an unexpected rejection cannot become an
+  // unhandled rejection (process-crashing in Node v15+). Callers can also await
+  // `done` to observe natural termination.
+  const done = loop().catch((err) => {
+    if (logger)
+      logger.error({ err: err?.message ?? String(err), label }, 'supervise: unexpected loop error');
+  });
+  return { stop, signal: ac.signal, done };
 }
 
 function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
     if (signal) {
       const onAbort = () => {
         clearTimeout(t);
         reject(new Error('aborted'));
       };
+      const t = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
+    } else {
+      setTimeout(resolve, ms);
     }
   });
 }

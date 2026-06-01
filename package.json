@@ -20,7 +20,7 @@
     "dev:code": "npm run dev -w code-bot",
     "dev:payment": "npm run dev -w payment-bot",
     "dev:card": "npm run dev -w card-bot",
-    "start": "pm2 start pm2.config.cjs",
+    "start": "pm2 startOrReload pm2.config.cjs --update-env",
     "stop": "pm2 stop pm2.config.cjs",
     "restart": "pm2 restart pm2.config.cjs",
     "logs": "pm2 logs",

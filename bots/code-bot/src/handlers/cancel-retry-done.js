@@ -7,7 +7,7 @@ import {
   deleteSession,
 } from '../session.js';
 import { refreshDeployMessage, getDeployRecord } from '../deploy.js';
-import { scheduleAutoAdvance } from './get-code.js';
+import { scheduleAutoAdvance, raceFetchers } from './get-code.js';
 
 /**
  * "Cancel" button — custom_id: codebot:cancel:<provider>.
@@ -75,38 +75,9 @@ export function retryButtonHandler({ db, bot, queues, fetchersByProvider, logger
     const hint = active.match_code ?? null;
     let result = null;
     try {
-      // Simple single-fetcher path replaced with the race; we don't import the
-      // helper because the handler is short and inlining is clearer.
-      if (fetcherList.length === 1) {
-        result = await fetcherList[0].fetchUntilDeadline({ clickTime, hint });
-      } else {
-        result = await new Promise((resolve) => {
-          const controllers = fetcherList.map(() => new AbortController());
-          let resolved = false;
-          let pending = fetcherList.length;
-          fetcherList.forEach((f, i) => {
-            f.fetchUntilDeadline({ clickTime, hint, signal: controllers[i].signal })
-              .then((hit) => {
-                if (resolved) return;
-                if (hit) {
-                  resolved = true;
-                  controllers.forEach((c, j) => j !== i && c.abort());
-                  resolve(hit);
-                } else if (--pending === 0) {
-                  resolved = true;
-                  resolve(null);
-                }
-              })
-              .catch(() => {
-                if (resolved) return;
-                if (--pending === 0) {
-                  resolved = true;
-                  resolve(null);
-                }
-              });
-          });
-        });
-      }
+      // Reuse the canonical race helper from get-code.js so the retry path
+      // shares the same per-fetcher logging and abort behavior.
+      result = await raceFetchers(fetcherList, { clickTime, hint, logger });
     } catch (err) {
       if (logger) logger.error({ err: err.message, provider }, 'retry fetcher threw');
     }

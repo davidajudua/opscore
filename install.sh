@@ -8,6 +8,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 command -v node >/dev/null 2>&1 || { echo "[error] Node.js 22+ not installed"; exit 1; }
+NODE_MAJOR="$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))")"
+[ "${NODE_MAJOR}" -ge 22 ] 2>/dev/null || { echo "[error] Node.js 22+ required (found $(node --version))"; exit 1; }
 command -v pm2  >/dev/null 2>&1 || { echo "installing pm2..."; npm install -g pm2; }
 
 echo "installing dependencies..."

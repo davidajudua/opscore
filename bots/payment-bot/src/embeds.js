@@ -55,7 +55,7 @@ export function paymentEmbed({ provider, amount, name, receivedAt }) {
 
 /* ============================================================== /refund */
 
-const REFUND_METHOD_LABELS = { zelle: 'Zelle', venmo: 'Venmo', paypal: 'PayPal', crypto: 'Crypto' };
+const REFUND_METHOD_LABELS = METHOD_LABELS;
 
 /**
  * Per-method embed field config — emoji + label for each modal value, in display order.
@@ -90,7 +90,7 @@ const REFUND_EMBED_FIELDS = {
 
 function refundFields(method, values) {
   const block = (v) => '```\n' + v + '\n```';
-  return REFUND_EMBED_FIELDS[method].map((f) => {
+  return (REFUND_EMBED_FIELDS[method] ?? []).map((f) => {
     let v = values[f.id];
     if (f.isAmount) {
       const n = Number(String(v ?? '').replace(/[^\d.]/g, ''));
@@ -141,7 +141,7 @@ function periodLines(period) {
   const amts = [
     ...KNOWN_METHODS.map((m) => period.byMethod[m] ?? 0),
     period.cashouts ?? 0,
-    period.balance,
+    period.balance ?? 0,
   ].map((v) => '$' + fmt(v));
   const labelMax = Math.max(...labels.map((l) => l.length + 1));
   const amountMax = Math.max(...amts.map((a) => a.length));
@@ -153,7 +153,7 @@ function periodLines(period) {
   }
   lines.push(row('Cashout', period.cashouts ?? 0));
   lines.push('─'.repeat(Math.max(...lines.map((l) => l.length))));
-  lines.push(row('Total', period.balance));
+  lines.push(row('Total', period.balance ?? 0));
   return lines;
 }
 
@@ -215,11 +215,43 @@ export function dashboardPayload({ today, week, month, allTime, locked, bot }) {
  * newest first, each row { dayStart, dayEnd, total, byMethod }.
  */
 export function historyPayload({ days, index, bot }) {
+  if (!days || days.length === 0) {
+    const c = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent('### History'),
+      )
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent('No history yet.'),
+      )
+      .addActionRowComponents(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(bot.customId('dash', 'page', 'dashboard'))
+            .setLabel('Back to Dashboard')
+            .setEmoji('🔙')
+            .setStyle(ButtonStyle.Secondary),
+        ),
+      );
+    return { components: [c], flags: MessageFlags.IsComponentsV2 };
+  }
+
   const i = Math.max(0, Math.min(days.length - 1, index ?? 0));
   const day = days[i];
 
-  const fmtDayLabel = (epochMs, isToday) => {
-    if (isToday) return 'Today';
+  // Eastern calendar date (YYYY-MM-DD) for a given epoch, so "Today" is decided
+  // by the day's actual Eastern date — not by array position. The newest row is
+  // typically yesterday's completed window, so position alone mislabels it.
+  const easternDay = (epochMs) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(epochMs));
+  const todayEastern = easternDay(Date.now());
+
+  const fmtDayLabel = (epochMs) => {
+    if (easternDay(epochMs) === todayEastern) return 'Today';
     return new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York',
       weekday: 'short',
@@ -247,7 +279,7 @@ export function historyPayload({ days, index, bot }) {
 
   const c = new ContainerBuilder()
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`### ${fmtDayLabel(day.dayStart, i === 0)}`),
+      new TextDisplayBuilder().setContent(`### ${fmtDayLabel(day.dayStart)}`),
     )
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent('```\n' + lines.join('\n') + '\n```'),

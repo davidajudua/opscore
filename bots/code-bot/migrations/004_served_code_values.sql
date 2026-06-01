@@ -10,9 +10,9 @@
 -- email AND SMS — without this, worker A could get the SMS code and worker
 -- B could later get the email version of the same expired code).
 
-CREATE TABLE served_code_values (
+CREATE TABLE IF NOT EXISTS served_code_values (
   code       TEXT PRIMARY KEY,
   served_at  INTEGER NOT NULL
 );
 
-CREATE INDEX served_code_values_served_at_idx ON served_code_values(served_at);
+CREATE INDEX IF NOT EXISTS served_code_values_served_at_idx ON served_code_values(served_at);

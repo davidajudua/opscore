@@ -24,9 +24,12 @@ const SAFEKEY_WEBHOOK = {
   //   "194084 is your Amex SafeKey Verification Code. Never share this code. ..."
   // Code is the first 6 digits, followed by " is your".
   codeRegex: /^(\d{6})\s+is your.*SafeKey/i,
-  // How far back from clickTime to look for matching messages. Same window as
-  // IMAP fetcher's sinceOffsetMs so the two sources behave identically.
-  sinceOffsetMs: 30_000,
+  // How far back from clickTime to look for matching messages. Matches the
+  // IMAP fetcher's SAFEKEY.sinceOffsetMs (5 min) so the two sources behave
+  // identically — a worker who takes a while to click after the SMS arrives
+  // still gets the code from whichever source finds it first. The dedup tables
+  // prevent the same code being served twice.
+  sinceOffsetMs: 5 * 60 * 1000,
   // How many recent messages to scan per poll. Webhook posts a few codes at a
   // time; 25 covers any realistic backlog.
   fetchLimit: 25,
@@ -137,12 +140,19 @@ export class WebhookSafekeyFetcher {
 }
 
 function sleepUntil(targetMs, signal) {
+  const delay = Math.max(0, targetMs - Date.now());
   return new Promise((resolve) => {
-    const delay = Math.max(0, targetMs - Date.now());
     const t = setTimeout(resolve, delay);
-    signal?.addEventListener('abort', () => {
-      clearTimeout(t);
-      resolve();
-    }, { once: true });
+    if (signal) {
+      const onAbort = () => {
+        clearTimeout(t);
+        resolve();
+      };
+      // Guard against an already-aborted signal: addEventListener would never
+      // fire 'abort' for an already-aborted controller, leaving the full delay
+      // to elapse on cancellation.
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }

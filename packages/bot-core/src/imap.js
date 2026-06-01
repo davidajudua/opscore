@@ -74,6 +74,24 @@ export class ImapClient {
     if (this.connecting) return this.connecting;
 
     this.connecting = (async () => {
+      // If a previous client exists but is no longer usable (dropped
+      // connection), close it before replacing it. Otherwise its underlying
+      // socket and error listener stay alive, leaking a socket on every
+      // reconnect over the bot's lifetime.
+      if (this.client) {
+        const stale = this.client;
+        this.client = null;
+        try {
+          await stale.logout();
+        } catch {
+          try {
+            stale.close();
+          } catch {
+            // ignore — best-effort cleanup of a dead client
+          }
+        }
+      }
+
       const client = new ImapFlow({
         host: this.cfg.host,
         port: this.cfg.port,
@@ -87,7 +105,19 @@ export class ImapClient {
       });
 
       const connectPromise = client.connect();
-      await withTimeout(connectPromise, this.connectTimeoutMs, 'imap connect');
+      try {
+        await withTimeout(connectPromise, this.connectTimeoutMs, 'imap connect');
+      } catch (err) {
+        // Connect timed out or failed: the in-flight ImapFlow instance may
+        // still establish a socket in the background. Close it so it isn't
+        // orphaned with an open socket.
+        try {
+          client.close();
+        } catch {
+          // ignore
+        }
+        throw err;
+      }
       this.client = client;
       if (this.logger)
         this.logger.info({ host: this.cfg.host, user: this.cfg.auth.user }, 'imap connected');

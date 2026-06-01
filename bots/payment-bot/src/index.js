@@ -13,8 +13,8 @@ import { activeProviders } from './providers.js';
 import { PaymentMonitor } from './monitor.js';
 import { recordPayment } from './ledger.js';
 import { paymentEmbed } from './embeds.js';
-import { refreshDashboards } from './commands.js';
 import {
+  refreshDashboards,
   dashboardCommand,
   dashboardHandler,
   dashboardButtonHandler,
@@ -60,7 +60,7 @@ async function main() {
   }
 
   const db = openDb({ dbPath: path.join(botRoot, 'data', 'payments.db'), logger });
-  runMigrations({ db, migrationsDir: path.join(botRoot, 'migrations'), logger });
+  await runMigrations({ db, migrationsDir: path.join(botRoot, 'migrations'), logger });
 
   const bot = new DiscordBot({
     token: env.DISCORD_TOKEN,
@@ -99,13 +99,27 @@ async function main() {
     });
     m.addEventListener('payment', async (ev) => {
       const { provider: p, uid, amount, name, receivedAt } = ev.detail;
-      const result = recordPayment(db, {
-        method: p.id,
-        amount,
-        name,
-        externalId: String(uid),
-        receivedAt,
-      });
+      // Name-only notifications (e.g. US Bank Zelle) carry no amount — there's
+      // nothing to book. Skip rather than let recordPayment throw on a null amount.
+      if (!Number.isFinite(amount) || amount <= 0) {
+        logger.debug({ provider: p.id, uid, amount }, 'payment event without a positive amount; skipping ledger');
+        return;
+      }
+      let result;
+      try {
+        result = recordPayment(db, {
+          method: p.id,
+          amount,
+          name,
+          externalId: String(uid),
+          receivedAt,
+        });
+      } catch (err) {
+        // A DB error (locked file, constraint) must not become an unhandled
+        // rejection that could halt this provider's monitor.
+        logger.error({ err: err.message, provider: p.id, uid }, 'recordPayment failed');
+        return;
+      }
       if (!result.inserted) {
         logger.debug({ provider: p.id, uid }, 'duplicate payment uid; skipping post');
         return;
@@ -118,7 +132,9 @@ async function main() {
       }
       // Live-refresh every saved /dashboard message so workers see the new total
       // without having to re-run the command.
-      refreshDashboards({ db, bot, repoRoot, logger }).catch(() => {});
+      refreshDashboards({ db, bot, repoRoot, logger }).catch((err) =>
+        logger.warn({ err: err.message }, 'dashboard refresh failed'),
+      );
     });
     m.start();
     return m;
@@ -134,20 +150,26 @@ async function main() {
     if (cur !== lastYmd) {
       lastYmd = cur;
       logger.info({ date: cur }, 'day rollover, refreshing dashboards');
-      refreshDashboards({ db, bot, repoRoot, logger }).catch(() => {});
+      refreshDashboards({ db, bot, repoRoot, logger }).catch((err) =>
+        logger.warn({ err: err.message }, 'dashboard refresh failed'),
+      );
     }
   }, 60_000);
 
   // Catch-up: if payments arrived while the bot was down, the IMAP monitor will
   // record them on first poll. A delayed refresh ensures the dashboard reflects
-  // those before any user interacts.
-  setTimeout(() => {
-    refreshDashboards({ db, bot, repoRoot, logger }).catch(() => {});
+  // those before any user interacts. Handle is stored so shutdown can cancel it —
+  // otherwise a quick restart fires this against a closed DB / stopped client.
+  const catchupTimer = setTimeout(() => {
+    refreshDashboards({ db, bot, repoRoot, logger }).catch((err) =>
+      logger.warn({ err: err.message }, 'dashboard refresh failed'),
+    );
   }, 30_000);
 
   const shutdown = async (signal) => {
     logger.info({ signal }, 'shutting down');
     clearInterval(rolloverTimer);
+    clearTimeout(catchupTimer);
     for (const m of monitors) await m.stop().catch(() => {});
     await bot.stop();
     db.close();

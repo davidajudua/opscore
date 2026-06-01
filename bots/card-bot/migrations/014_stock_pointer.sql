@@ -7,7 +7,7 @@
 -- last-deployed stock panel in that channel. Re-running /stock in the same
 -- channel updates the pointer (old message becomes orphaned and is left alone).
 
-CREATE TABLE stock_pointer (
+CREATE TABLE IF NOT EXISTS stock_pointer (
   channel_id  TEXT PRIMARY KEY,
   message_id  TEXT NOT NULL,
   deployed_at INTEGER NOT NULL

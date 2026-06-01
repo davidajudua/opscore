@@ -2,8 +2,6 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-const EXEC = 'exec';
-
 /**
  * Open (or create) a SQLite database at `dbPath`. Uses Node's built-in `node:sqlite`
  * (no native build step required). Enables WAL mode and a sensible busy timeout.
@@ -16,10 +14,12 @@ const EXEC = 'exec';
 export function openDb({ dbPath, logger, readonly = false }) {
   if (!dbPath) throw new Error('openDb: dbPath is required');
 
-  mkdirSync(path.dirname(dbPath), { recursive: true });
+  // Only create the parent directory when we may write. A read-only open must
+  // not have the side effect of creating directories for a missing database.
+  if (!readonly) mkdirSync(path.dirname(dbPath), { recursive: true });
 
   const db = new DatabaseSync(dbPath, { readOnly: readonly });
-  const runScript = (sql) => db[EXEC](sql);
+  const runScript = (sql) => db.exec(sql);
 
   if (!readonly) {
     runScript('PRAGMA journal_mode = WAL');

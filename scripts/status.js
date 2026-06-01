@@ -7,6 +7,7 @@ const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 const DOT = '●';
 
+// Keep in sync with the apps list in pm2.config.cjs.
 const BOT_NAMES = new Set(['card-bot', 'code-bot', 'payment-bot']);
 const TRANSIENT = new Set(['launching', 'stopping', 'restarting', 'waiting restart']);
 

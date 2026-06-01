@@ -5,12 +5,15 @@ import dotenv from 'dotenv';
 import { z } from 'zod';
 
 /**
- * Load .env files in priority order:
- *   1. <repoRoot>/.env             (shared across all bots)
+ * Load .env files. Precedence, highest to lowest:
+ *   1. real process.env            (e.g. set by PM2 / systemd in production)
  *   2. <botRoot>/.env              (bot-specific overrides + secrets)
+ *   3. <repoRoot>/.env             (shared defaults across all bots)
  *
- * Variables already in process.env are NOT overridden — that's the dotenv default
- * and the right behavior for production where env comes from PM2 / systemd.
+ * Implementation: the bot-specific file is loaded first and the shared file second.
+ * dotenv never overwrites a key already present in process.env (its default), so
+ * earlier-loaded values win — giving bot-specific precedence over shared, while any
+ * value already in the real process.env still beats both.
  *
  * @param {object} opts
  * @param {string} opts.botRoot   Absolute path to the bot's package directory
@@ -24,8 +27,8 @@ export function loadEnvFiles({ botRoot, repoRoot } = {}) {
   const sharedEnv = path.join(root, '.env');
   const botEnv = path.join(botRoot, '.env');
 
-  if (existsSync(sharedEnv)) dotenv.config({ path: sharedEnv });
   if (existsSync(botEnv)) dotenv.config({ path: botEnv });
+  if (existsSync(sharedEnv)) dotenv.config({ path: sharedEnv });
 }
 
 /**

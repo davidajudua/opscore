@@ -1,4 +1,3 @@
-import { MessageFlags } from 'discord.js';
 import { ephemeralError } from '@platform/bot-core/discord';
 import { refreshDeployMessage } from '../deploy.js';
 
@@ -44,6 +43,5 @@ export function enoModalHandler({ db, bot, queues, logger }) {
 
     await interaction.deferUpdate().catch(() => {});
     await refreshDeployMessage({ client: interaction.client, db, bot, queue, provider: 'eno', logger });
-    void MessageFlags;
   };
 }

@@ -100,7 +100,15 @@ async function main() {
     amex: webhookFetcher.isConfigured() ? [imapFetcher, webhookFetcher] : [imapFetcher],
     eno: [enoFetcher],
   };
-  const allFetchers = [imapFetcher, webhookFetcher, enoFetcher];
+  // Only close fetchers we actually started. The webhook fetcher is skipped
+  // when unconfigured (mirrors fetchersByProvider) so shutdown never calls
+  // close() on a fetcher that was never wired up.
+  const allFetchers = [imapFetcher, enoFetcher];
+  if (webhookFetcher.isConfigured()) allFetchers.push(webhookFetcher);
+
+  // Tracks the auto-advance timers created in autoFireEno so shutdown can
+  // cancel them — otherwise a pending 10s timer can fire after db.close().
+  const pendingTimers = new Set();
 
   const ctx = { db, bot, queues, fetchersByProvider, env, logger };
 
@@ -135,6 +143,7 @@ async function main() {
           entry,
           fetcher: fetchersByProvider.eno?.[0],
           logger,
+          pendingTimers,
         });
         return;
       }
@@ -210,6 +219,10 @@ async function main() {
 
   const shutdown = async (signal) => {
     logger.info({ signal }, 'shutting down');
+    // Cancel any pending auto-advance timers first so they can't fire a
+    // queue.remove()/refreshDeployMessage() against a closed db below.
+    for (const t of pendingTimers) clearTimeout(t);
+    pendingTimers.clear();
     for (const q of Object.values(queues)) q.shutdown();
     await Promise.all(allFetchers.map((f) => f.close?.().catch(() => {})));
     await bot.stop();
@@ -228,7 +241,7 @@ async function main() {
  * Posts "Fetching..." then edits with code or timeout. Removes worker from
  * queue on completion (auto-advance — no Done button to click).
  */
-async function autoFireEno({ bot, db, queue, channelId, entry, fetcher, logger }) {
+async function autoFireEno({ bot, db, queue, channelId, entry, fetcher, logger, pendingTimers }) {
   if (!fetcher) {
     logger.warn({ userId: entry.user_id }, 'eno auto-fire: no fetcher configured');
     queue.remove(entry.user_id);
@@ -268,13 +281,16 @@ async function autoFireEno({ bot, db, queue, channelId, entry, fetcher, logger }
       await msg.edit(buildCodeView({ code: result.code, bot, userId: entry.user_id, provider: 'eno' }));
       logger.info({ provider: 'eno', uid: result.uid, userId: entry.user_id }, 'code delivered');
       // Auto-advance after 10s so the next worker's auto-fire can begin.
-      setTimeout(async () => {
+      // Track the timer so shutdown can cancel it before db.close().
+      const timer = setTimeout(async () => {
+        pendingTimers?.delete(timer);
         const e = queue.getByUserId(entry.user_id);
         if (e) queue.remove(entry.user_id);
         await refreshDeployMessage({
           client: bot.client, db, bot, queue, provider: 'eno', logger,
         }).catch(() => {});
       }, 10_000);
+      pendingTimers?.add(timer);
     } else {
       await msg.edit(buildAutoTimeoutView({ userId: entry.user_id, provider: 'eno' }));
       logger.warn({ provider: 'eno', userId: entry.user_id, hint }, 'eno auto-fire timed out');

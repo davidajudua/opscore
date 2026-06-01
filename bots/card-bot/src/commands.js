@@ -306,6 +306,7 @@ export function cardActionHandler({ db, bot, logger }) {
     }
     if (action === 'return') {
       returnCardToPool(db, session);
+      closeCardSession(db, interaction.message.id); // match 'used'/'error': don't leave an orphan session row
       await interaction.update(cardFinalEmbed({ card: session, provider, action: 'returned' }));
       logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card returned to pool');
       return;
@@ -993,7 +994,16 @@ export function loadHandler({ db, env, bot, logger }) {
     const mode = interaction.options.getString('mode') ?? 'append';
     const channel = await interaction.client.channels.fetch(interaction.channelId);
 
-    const text = await fetch(file.url).then((r) => r.text());
+    // The silent-ack reply is already deleted, so a fetch failure has no reply to fall
+    // back on — surface it as a channel message instead of throwing unhandled.
+    let text;
+    try {
+      text = await fetch(file.url).then((r) => r.text());
+    } catch (err) {
+      logger?.error({ err: err.message, admin: interaction.user.id }, 'load: attachment fetch failed');
+      await channel.send({ content: '❌ Failed to download the uploaded file. Please try again.' });
+      return;
+    }
 
     if (type === 'cards') {
       const found = listProviders(db).find((p) => p.id === provider);
@@ -1050,7 +1060,9 @@ export function exportHandler({ db, env, logger }) {
     }
 
     const file = new AttachmentBuilder(Buffer.from(text, 'utf8'), { name: filename });
-    await interaction.reply({ files: [file] });
+    // Ephemeral: the attachment contains full card numbers, CVVs and expiries — it must
+    // be visible only to the admin who ran /export, never posted to the channel.
+    await interaction.reply({ files: [file], flags: MessageFlags.Ephemeral });
     logger?.info({ admin: interaction.user.id, type, provider }, 'exported');
   };
 }
