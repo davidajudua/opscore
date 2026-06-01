@@ -6,9 +6,9 @@
 -- gives atomic claim semantics so two concurrent fetchers (currently only one,
 -- but the race plumbing supports more) can't serve the same message twice.
 
-CREATE TABLE served_webhook_codes (
+CREATE TABLE IF NOT EXISTS served_webhook_codes (
   message_id TEXT PRIMARY KEY,
   served_at  INTEGER NOT NULL
 );
 
-CREATE INDEX served_webhook_codes_served_at_idx ON served_webhook_codes(served_at);
+CREATE INDEX IF NOT EXISTS served_webhook_codes_served_at_idx ON served_webhook_codes(served_at);

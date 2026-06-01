@@ -68,32 +68,45 @@ export class WorkerQueue extends EventEmitter {
   add({ userId, username, sourceId = null, matchCode = null, metadata = null }) {
     if (!userId || !username) throw new Error('add: userId and username required');
 
-    const existing = this.getByUserId(userId);
-    if (existing) return { entry: existing, alreadyQueued: true };
+    // Wrap the entire idempotency check + empty-queue check + INSERT in a single
+    // transaction so they are atomic. With BEGIN IMMEDIATE this serializes the
+    // decision across multiple processes sharing the SQLite file (a common bot
+    // deployment): the existence check is inside the lock, so a concurrent
+    // duplicate cleanly returns { alreadyQueued: true } instead of throwing on
+    // the UNIQUE(user_id) constraint, and two users can't both be inserted as
+    // 'active'.
+    const insert = this.db.transaction(() => {
+      const existing = this.getByUserId(userId);
+      if (existing) return { alreadyQueued: true };
 
-    const empty = this.size() === 0;
-    const now = Date.now();
-    const status = empty ? 'active' : 'waiting';
-    const activatedAt = empty ? now : null;
+      const empty = this.size() === 0;
+      const now = Date.now();
+      const status = empty ? 'active' : 'waiting';
+      const activatedAt = empty ? now : null;
 
-    this.db.run(
-      `INSERT INTO ${this.table}
-        (user_id, username, status, joined_at, activated_at, source_id, match_code, metadata)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      userId,
-      username,
-      status,
-      now,
-      activatedAt,
-      sourceId,
-      matchCode,
-      metadata ? JSON.stringify(metadata) : null,
-    );
+      this.db.run(
+        `INSERT INTO ${this.table}
+          (user_id, username, status, joined_at, activated_at, source_id, match_code, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        userId,
+        username,
+        status,
+        now,
+        activatedAt,
+        sourceId,
+        matchCode,
+        metadata ? JSON.stringify(metadata) : null,
+      );
+      return { alreadyQueued: false, empty };
+    });
+    const result = insert();
 
     const entry = this.getByUserId(userId);
+    if (result.alreadyQueued) return { entry, alreadyQueued: true };
+
     if (this.logger) this.logger.info({ entry, queue: this.name }, 'queue add');
 
-    if (empty) {
+    if (result.empty) {
       this.startIdleTimer(entry);
       this.emit('activate', { entry });
     }
@@ -155,17 +168,39 @@ export class WorkerQueue extends EventEmitter {
     this.db.run(`UPDATE ${this.table} SET session_message_id = ? WHERE user_id = ?`, messageId, userId);
   }
 
+  /**
+   * Normalize a raw SQLite row into an entry: `metadata` is stored as a JSON
+   * string (see add()) and must be parsed back into an object on every read.
+   * Returns the row as-is when null/undefined.
+   */
+  parseRow(row) {
+    if (!row) return row;
+    if (row.metadata != null) {
+      try {
+        row.metadata = JSON.parse(row.metadata);
+      } catch {
+        // Leave the raw value if it isn't valid JSON (shouldn't happen for
+        // rows written by add(), but don't throw on legacy/manual data).
+      }
+    }
+    return row;
+  }
+
   getByUserId(userId) {
-    return this.db.get(`SELECT * FROM ${this.table} WHERE user_id = ?`, userId);
+    return this.parseRow(this.db.get(`SELECT * FROM ${this.table} WHERE user_id = ?`, userId));
   }
 
   getActive() {
-    return this.db.get(`SELECT * FROM ${this.table} ORDER BY position ASC LIMIT 1`);
+    return this.parseRow(
+      this.db.get(
+        `SELECT * FROM ${this.table} WHERE status IN ('active', 'fetching') ORDER BY position ASC LIMIT 1`,
+      ),
+    );
   }
 
   /** All entries, ordered by position. */
   list() {
-    return this.db.all(`SELECT * FROM ${this.table} ORDER BY position ASC`);
+    return this.db.all(`SELECT * FROM ${this.table} ORDER BY position ASC`).map((r) => this.parseRow(r));
   }
 
   size() {

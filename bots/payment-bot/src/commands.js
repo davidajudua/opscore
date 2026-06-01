@@ -290,7 +290,7 @@ export function cryptoModalHandler({ db, env, bot, logger, repoRoot }) {
       await interaction.editReply({
         content: isNotFound
           ? '❌ **Transaction not found.** It may be unconfirmed, invalid, or on a testnet.'
-          : `❌ **Error fetching transaction:**\n\`\`\`${err.message}\`\`\``,
+          : '❌ **Error fetching transaction.** Please double-check the hash/URL and try again.',
       });
       return;
     }

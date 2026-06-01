@@ -20,6 +20,7 @@ export const envSchema = z.object({
   CRYPTO_ADDRESS_ETH: optionalString,
   CRYPTO_ADDRESS_LTC: optionalString,
   CRYPTO_ADDRESS_SOL: optionalString,
+  CRYPTO_ADDRESS_TRX: optionalString,
 
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   ADMIN_ROLE_NAME: z.string().default('owner'),

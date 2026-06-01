@@ -10,15 +10,17 @@
  * new pool). Returns the counts of rows that were deleted.
  */
 export function purgeAll(db) {
-  const counts = {
-    cards: db.get(`SELECT COUNT(*) AS n FROM cards`).n,
-    stock_alerts: db.get(`SELECT COUNT(*) AS n FROM stock_alerts`).n,
-    providers: db.get(`SELECT COUNT(*) AS n FROM providers`).n,
-    whitelist: db.get(`SELECT COUNT(*) AS n FROM whitelist`).n,
-    card_sessions: db.get(`SELECT COUNT(*) AS n FROM card_sessions`).n,
-    stock_pointer: db.get(`SELECT COUNT(*) AS n FROM stock_pointer`).n,
-  };
+  // Count and delete in one transaction so the returned counts match exactly what
+  // was deleted, even under a concurrent write.
   const txn = db.transaction(() => {
+    const counts = {
+      cards: db.get(`SELECT COUNT(*) AS n FROM cards`).n,
+      stock_alerts: db.get(`SELECT COUNT(*) AS n FROM stock_alerts`).n,
+      providers: db.get(`SELECT COUNT(*) AS n FROM providers`).n,
+      whitelist: db.get(`SELECT COUNT(*) AS n FROM whitelist`).n,
+      card_sessions: db.get(`SELECT COUNT(*) AS n FROM card_sessions`).n,
+      stock_pointer: db.get(`SELECT COUNT(*) AS n FROM stock_pointer`).n,
+    };
     db.run(`DELETE FROM cards`);
     db.run(`DELETE FROM providers`);
     db.run(`DELETE FROM whitelist`);
@@ -27,9 +29,9 @@ export function purgeAll(db) {
     db.run(`DELETE FROM claim_history`);
     db.run(`DELETE FROM settings`);
     db.run(`DELETE FROM stock_pointer`);
+    return counts;
   });
-  txn();
-  return counts;
+  return txn();
 }
 
 /* ---------------------------------------------- low-stock alert state */
@@ -54,7 +56,10 @@ export function clearAlert(db, key) {
 }
 
 export function clearAlertsForPrefix(db, prefix) {
-  db.run(`DELETE FROM stock_alerts WHERE alert_key LIKE ?`, `${prefix}:%`);
+  // Escape LIKE wildcards in the (caller-supplied) prefix so a provider id containing
+  // '_' or '%' doesn't match unrelated alert keys. '\' is the escape char below.
+  const escaped = String(prefix).replace(/[\\%_]/g, (c) => `\\${c}`);
+  db.run(`DELETE FROM stock_alerts WHERE alert_key LIKE ? ESCAPE '\\'`, `${escaped}:%`);
 }
 
 export function cardCount(db, providerId) {
@@ -111,7 +116,9 @@ export function editProvider(db, { id, newId, zip, expDate }) {
       // Re-point the FK first, then move the providers row. Doing it in this
       // order avoids momentarily orphaning cards rows.
       db.run(`UPDATE cards SET provider_id = ? WHERE provider_id = ?`, newId, id);
-      db.run(`UPDATE providers SET id = ?, name = ? WHERE id = ?`, newId, newId, id);
+      // Rename changes only the id (primary key). The human-readable name must be
+      // preserved — binding newId to `name` here would overwrite it with the id.
+      db.run(`UPDATE providers SET id = ? WHERE id = ?`, newId, id);
       renamed = true;
     }
 
@@ -145,19 +152,19 @@ export function listProviders(db) {
  * so the caller can report what was wiped.
  */
 export function deleteProvider(db, providerId) {
-  // Provider gone → its alert keys are orphaned. Clean them up.
-  clearAlertsForPrefix(db, `card:${providerId}`);
-  let cardsDeleted = 0;
   const txn = db.transaction(() => {
-    cardsDeleted = db.get(
+    const cardsDeleted = db.get(
       `SELECT COUNT(*) AS n FROM cards WHERE provider_id = ?`,
       providerId,
     ).n;
     db.run(`DELETE FROM cards WHERE provider_id = ?`, providerId);
     db.run(`DELETE FROM providers WHERE id = ?`, providerId);
+    // Clean orphaned alert keys inside the txn so a rollback can't leave alert
+    // state cleared while the provider/cards still exist.
+    clearAlertsForPrefix(db, `card:${providerId}`);
+    return { cardsDeleted };
   });
-  txn();
-  return { cardsDeleted };
+  return txn();
 }
 
 /**

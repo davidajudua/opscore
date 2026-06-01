@@ -126,6 +126,11 @@ export class EnoFetcher {
     const client = await this._getClient();
     const lock = await client.getMailboxLock(this.config.folder);
     try {
+      // NOOP forces the server to flush EXISTS / EXPUNGE — without this, newly
+      // arrived mail can stay invisible to the IMAP session for a poll cycle.
+      // Mirrors SafekeyFetcher.fetchOnce so Eno polls behave identically.
+      try { await client.noop(); } catch { /* noop can fail harmlessly */ }
+
       const sinceDate = new Date(clickTime - ENO.sinceOffsetMs);
       // Day-granular search; we re-filter to second precision below.
       const imapSinceDate = new Date(sinceDate.getTime() - 24 * 60 * 60_000);

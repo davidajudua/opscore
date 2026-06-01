@@ -17,6 +17,18 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 
+/**
+ * Exact, case-insensitive sender match. Substring matching is unsafe: a configured
+ * sender of "noreply@paystack.com" would otherwise also match a spoofed envelope
+ * address like "noreply@paystack.com.attacker.com", letting an external actor inject
+ * a false payment event. Pure function.
+ */
+export function senderMatches(fromAddr, senders) {
+  const addr = (fromAddr ?? '').toLowerCase();
+  if (!addr) return false;
+  return senders.some((s) => addr === String(s).toLowerCase());
+}
+
 const RECONNECT_BACKOFFS_MS = [2_000, 5_000, 10_000, 30_000, 60_000, 120_000];
 // Backstop in case an IDLE notification ever gets dropped — every few minutes
 // we sweep without waiting for an EXISTS push.
@@ -247,8 +259,7 @@ export class PaymentMonitor extends EventTarget {
 
   async _handleMessage(msg) {
     const fromAddr = (msg.envelope?.from?.[0]?.address ?? '').toLowerCase();
-    const matched = this.provider.senders.some((s) => fromAddr.includes(s.toLowerCase()));
-    if (!matched) return;
+    if (!senderMatches(fromAddr, this.provider.senders)) return;
 
     let parsed;
     try {

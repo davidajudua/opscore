@@ -117,8 +117,19 @@ export async function refreshDeployMessage({ client, db, bot, queue, provider, l
     await msg.edit(deployMessagePayload({ queue, bot, provider }));
     return msg;
   } catch (err) {
-    if (logger) logger.warn({ provider, err: err.message }, 'deploy refresh failed; clearing record');
-    clearDeployRecord(db, provider);
+    // Only a genuine "Unknown Message" (Discord error code 10008) means the
+    // stored pointer is dead and must be cleared so the next /deploy posts
+    // fresh. Transient failures (rate limits, network resets, timeouts) must
+    // NOT wipe the record — doing so would permanently freeze the dashboard
+    // until someone manually re-runs /deploy.
+    const isUnknownMessage = err?.code === 10008;
+    if (logger) {
+      logger.warn(
+        { provider, err: err?.message, cleared: isUnknownMessage },
+        'deploy refresh failed',
+      );
+    }
+    if (isUnknownMessage) clearDeployRecord(db, provider);
     return null;
   }
 }

@@ -3,7 +3,6 @@ import {
   ActionRowBuilder,
   TextInputBuilder,
   TextInputStyle,
-  MessageFlags,
 } from 'discord.js';
 import { refreshDeployMessage } from '../deploy.js';
 
@@ -68,7 +67,5 @@ export function requestButtonHandler({ db, bot, queues, logger }) {
       );
     }
     await refreshDeployMessage({ client: interaction.client, db, bot, queue, provider, logger });
-    // Silence unused-var lint for MessageFlags import (kept for future ephemeral replies).
-    void MessageFlags;
   };
 }

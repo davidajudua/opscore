@@ -3,10 +3,10 @@
 -- be re-delivered to the next worker if their click landed inside the fetcher's
 -- 30s back-window. Persisting to disk closes that hole.
 
-CREATE TABLE served_codes (
+CREATE TABLE IF NOT EXISTS served_codes (
   uid       INTEGER PRIMARY KEY,
   served_at INTEGER NOT NULL
 );
 
 -- Purge query: DELETE FROM served_codes WHERE served_at < ?
-CREATE INDEX served_codes_served_at_idx ON served_codes(served_at);
+CREATE INDEX IF NOT EXISTS served_codes_served_at_idx ON served_codes(served_at);

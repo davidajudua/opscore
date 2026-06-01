@@ -159,18 +159,24 @@ export class DiscordBot {
     } catch (err) {
       if (this.logger)
         this.logger.error(
-          { err: err.message, stack: err.stack, customId: interaction.customId },
+          { err: err?.message ?? String(err), stack: err?.stack, customId: interaction.customId },
           'interaction handler threw',
         );
       try {
-        const reply = {
-          content: 'Something went wrong handling that. Try again, or ping an admin.',
-          flags: MessageFlags.Ephemeral,
-        };
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp(reply);
-        } else if (interaction.isRepliable?.()) {
-          await interaction.reply(reply);
+        if (interaction.isAutocomplete()) {
+          // Autocomplete interactions are not repliable; close them with an empty
+          // completion so the client doesn't show a stale loading indicator until timeout.
+          await interaction.respond([]);
+        } else {
+          const reply = {
+            content: 'Something went wrong handling that. Try again, or ping an admin.',
+            flags: MessageFlags.Ephemeral,
+          };
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp(reply);
+          } else if (interaction.isRepliable?.()) {
+            await interaction.reply(reply);
+          }
         }
       } catch {
         // double-fault — give up, the original error is logged
@@ -178,10 +184,30 @@ export class DiscordBot {
     }
   }
 
-  /** Push command definitions to Discord (guild or global). Returns the registered list. */
-  async registerCommands() {
-    const rest = new REST({ version: '10' }).setToken(this.token);
+  /**
+   * Push command definitions to Discord (guild or global). Returns the registered list.
+   *
+   * A `PUT` to Discord's command endpoint is a full replace, so an empty body would
+   * permanently delete every existing slash command for this application. We guard
+   * against that: with no registered commands this is a no-op (returns `[]`) unless
+   * the caller explicitly opts into wiping commands via `{ allowEmpty: true }`.
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.allowEmpty=false]  Permit an empty PUT (deletes all commands).
+   */
+  async registerCommands({ allowEmpty = false } = {}) {
     const body = [...this.commands.values()].map((c) => c.definition);
+
+    if (body.length === 0 && !allowEmpty) {
+      if (this.logger)
+        this.logger.warn(
+          { scope: this.guildId ? 'guild' : 'global' },
+          'registerCommands: no commands registered; skipping PUT to avoid wiping existing commands (pass { allowEmpty: true } to override)',
+        );
+      return [];
+    }
+
+    const rest = this.rest ?? new REST({ version: '10' }).setToken(this.token);
 
     const route = this.guildId
       ? Routes.applicationGuildCommands(this.clientId, this.guildId)

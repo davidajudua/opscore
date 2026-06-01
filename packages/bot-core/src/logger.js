@@ -2,8 +2,6 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import pino from 'pino';
 
-const DEFAULT_LEVEL = process.env.LOG_LEVEL ?? 'info';
-
 const rootLoggers = new Map();
 
 function buildRootLogger({ botName, logDir, level }) {
@@ -64,7 +62,9 @@ export function createBotLogger({ botName, logDir, level } = {}) {
   if (cached) return cached;
 
   const dir = logDir ?? path.join(process.cwd(), 'logs', botName);
-  const lvl = level ?? DEFAULT_LEVEL;
+  // Resolve the level at call time, not module-load time, so a LOG_LEVEL set by
+  // loadEnvFiles() (which usually runs after this module is imported) is honored.
+  const lvl = level ?? process.env.LOG_LEVEL ?? 'info';
 
   const root = buildRootLogger({ botName, logDir: dir, level: lvl });
   rootLoggers.set(botName, root);

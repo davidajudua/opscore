@@ -11,18 +11,20 @@
  * the bot to a new business. Returns the row counts that were deleted.
  */
 export function purgeAll(db) {
-  const counts = {
-    ledger: db.get(`SELECT COUNT(*) AS n FROM ledger`).n,
-    imap_cursor: db.get(`SELECT COUNT(*) AS n FROM imap_cursor`).n,
-    dashboard_pointer: db.get(`SELECT COUNT(*) AS n FROM dashboard_pointer`).n,
-  };
+  // Count and delete inside one transaction so the returned counts always match
+  // exactly what was deleted, even if another path writes concurrently.
   const txn = db.transaction(() => {
+    const counts = {
+      ledger: db.get(`SELECT COUNT(*) AS n FROM ledger`).n,
+      imap_cursor: db.get(`SELECT COUNT(*) AS n FROM imap_cursor`).n,
+      dashboard_pointer: db.get(`SELECT COUNT(*) AS n FROM dashboard_pointer`).n,
+    };
     db.run(`DELETE FROM ledger`);
     db.run(`DELETE FROM imap_cursor`);
     db.run(`DELETE FROM dashboard_pointer`);
+    return counts;
   });
-  txn();
-  return counts;
+  return txn();
 }
 
 /* ---------------------------------------------- dashboard pointers ---- */
@@ -121,6 +123,8 @@ export function computeTotals(db, { since } = {}) {
   );
   const byMethod = {};
   let cashouts = 0;
+  let grossIncome = 0; // payments only — true gross, before adjustments
+  let adjustments = 0; // chargebacks/refunds, subtracted at read
 
   for (const r of rows) {
     if (r.kind === 'cashout') {
@@ -129,15 +133,23 @@ export function computeTotals(db, { since } = {}) {
     }
     const m = r.method ?? 'unknown';
     if (!byMethod[m]) byMethod[m] = 0;
-    byMethod[m] += r.kind === 'adjustment' ? -r.amount : r.amount;
+    if (r.kind === 'adjustment') {
+      adjustments += r.amount;
+      byMethod[m] -= r.amount; // byMethod stays NET per method (for display)
+    } else {
+      grossIncome += r.amount;
+      byMethod[m] += r.amount;
+    }
   }
 
-  const grossIncome = Object.values(byMethod).reduce((a, b) => a + b, 0);
+  const netIncome = grossIncome - adjustments;
   return {
-    byMethod,
+    byMethod, // net per method (payments − adjustments)
     cashouts,
-    balance: grossIncome - cashouts,
-    grossIncome,
+    grossIncome, // true gross: sum of payments only
+    adjustments, // total adjustments (chargebacks/refunds)
+    netIncome, // grossIncome − adjustments
+    balance: netIncome - cashouts,
   };
 }
 

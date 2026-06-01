@@ -25,7 +25,6 @@ function botApp(name) {
     autorestart: true,
     max_restarts: 10,
     min_uptime: '60s',
-    restart_delay: 5_000,
     exp_backoff_restart_delay: 100,
     out_file: path.join(logsDir, name, `${name}-pm2.out.log`),
     error_file: path.join(logsDir, name, `${name}-pm2.err.log`),
