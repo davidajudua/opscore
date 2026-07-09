@@ -1,19 +1,19 @@
 # opscore
 
-**An operations core: one shared Node runtime that powers a fleet of single-purpose internal-ops bots on Discord — one shared core, many bots, supervised under PM2.**
+**One shared Node runtime that runs a fleet of single-purpose internal-ops bots on Discord, all supervised under PM2.**
 
-Most "Discord bots" are one giant file that does everything and falls over on restart. This is the
-opposite: a thin, shared **core** (`@platform/bot-core`) handles the boring, easy-to-get-wrong parts
-once — config, database, logging, the Discord command/button/modal router, HTTP, a fair work queue,
-and process supervision — so each bot is just its own business logic. Adding the *next* internal tool
-is hours, not days.
+Most "Discord bots" are one giant file that does everything and falls over on restart. This one goes
+the other way. A thin shared core (`@platform/bot-core`) handles the parts that are easy to get wrong:
+config, database, logging, the Discord command/button/modal router, HTTP, a fair work queue, and
+process supervision. Each bot is left with just its own business logic, so adding the next internal
+tool takes hours, not days.
 
-It's built to run real operations: the bots here distribute single-use cards, track business revenue,
-and retrieve verification codes for shared accounts — end to end, with no manual spreadsheet step.
+It runs real operations: the bots here hand out single-use cards, track business revenue, and retrieve
+verification codes for shared accounts, end to end, with no manual spreadsheet step.
 
 ---
 
-## Why it's built this way (the architecture decisions)
+## Why it's built this way
 
 - **Shared core, thin bots.** Every bot imports `@platform/bot-core`. A fix to logging, the router,
   or migrations lands once and every bot gets it. New bots start at "business logic only."
@@ -52,7 +52,7 @@ and retrieve verification codes for shared accounts — end to end, with no manu
 | **payment-bot** | Aggregates incoming payments across rails (Zelle/Venmo/PayPal email + on-chain) and posts daily/weekly/monthly revenue totals to a Discord dashboard | [README](bots/payment-bot/README.md) |
 | **code-bot** | Retrieves one-time verification codes from a dedicated inbox (IMAP, with a webhook fallback) and hands them out on request, one at a time | [README](bots/code-bot/README.md) |
 
-## `@platform/bot-core` — what the shared core provides
+## `@platform/bot-core`: what the shared core provides
 
 | Module | Responsibility |
 |---|---|
@@ -75,7 +75,7 @@ for b in card-bot payment-bot code-bot; do cp bots/$b/.env.example bots/$b/.env;
 # fill in each bots/<bot>/.env
 ```
 
-- **Linux:** `bash install.sh` (idempotent — runs `npm install` + `pm2 startOrReload`, preserves `.env`).
+- **Linux:** `bash install.sh` (idempotent: runs `npm install` + `pm2 startOrReload`, preserves `.env`).
 - **Windows:** run `start.bat` for a status + `start`/`stop`/`restart`/`logs` control panel.
 
 Each bot's SQLite DB is created automatically by migrations on first start.
