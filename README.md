@@ -1,5 +1,9 @@
 # opscore
 
+Edits belong in `career/opscore` of the private [davidajudua/workspace](https://github.com/davidajudua/workspace) repo.
+This GitHub repo is a public mirror.
+Do not commit here.
+
 **One shared Node runtime that runs a fleet of single-purpose internal-ops bots on Discord, all supervised under PM2.**
 
 Most "Discord bots" are one giant file that does everything and falls over on restart. This one goes
