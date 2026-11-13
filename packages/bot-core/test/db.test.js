@@ -45,6 +45,28 @@ test('SQL and JS migrations apply in filename order, once', async () => {
   }
 });
 
+test('a query cached before a migration rebuilt its table returns the new columns', async () => {
+  const { db, migrationsDir, cleanup } = scratch({
+    '001_init.sql': `CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT NOT NULL);
+      INSERT INTO items (label) VALUES ('a');`,
+    '002_rebuild.js': `export function up(db) {
+      const rows = db.all('SELECT * FROM items');
+      db.runScript('CREATE TABLE items_v2 (id INTEGER PRIMARY KEY, label TEXT NOT NULL, extra TEXT NOT NULL)');
+      for (const r of rows) db.run('INSERT INTO items_v2 VALUES (?, ?, ?)', r.id, r.label, 'added');
+      db.runScript('DROP TABLE items; ALTER TABLE items_v2 RENAME TO items');
+    }`,
+  });
+  try {
+    await runMigrations({ db, migrationsDir });
+    assert.deepEqual(
+      db.all('SELECT * FROM items').map((row) => ({ ...row })),
+      [{ id: 1, label: 'a', extra: 'added' }],
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test('a JS migration that throws rolls back its writes and stays unapplied', async () => {
   const { db, migrationsDir, cleanup } = scratch({
     '001_init.sql': `CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT NOT NULL);`,

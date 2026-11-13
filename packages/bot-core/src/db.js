@@ -45,6 +45,14 @@ export function openDb({ dbPath, logger, readonly = false }) {
     raw: db,
     prepareCached,
 
+    /**
+     * Forget every cached statement. Call after a schema change: on Node 22 a
+     * statement prepared before a table was rebuilt keeps returning the old columns.
+     */
+    clearStatementCache() {
+      stmtCache.clear();
+    },
+
     /** Run a single statement (no result rows expected). */
     run(sql, ...params) {
       return prepareCached(sql).run(...params);
@@ -137,6 +145,7 @@ export async function runMigrations({ db, migrationsDir, logger, context = {} })
       db.run(`INSERT INTO _migrations (name, applied_at) VALUES (?, ?)`, file, Date.now());
     });
     txn();
+    db.clearStatementCache();
 
     newlyApplied.push(file);
     if (logger) logger.info({ file }, 'applied migration');
