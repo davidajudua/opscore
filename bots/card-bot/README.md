@@ -66,7 +66,8 @@ The root [Security section](../../README.md#security) covers backing up the key.
 Migration `016_seal_cards.js` upgrades a database from before encryption.
 It rebuilds `cards` and `card_sessions` with sealed columns, drops the plaintext tables, and skips a table that is already sealed.
 `openInventory` turns on `secure_delete` before migrating.
-The sealing upgrade then runs `VACUUM` to discard historical plaintext in free pages and truncates the WAL.
+After migrating, card-bot runs `VACUUM` once per database to discard historical plaintext in free pages, records completion in settings, and truncates the WAL.
+If the scrub fails, startup fails and the next start retries it.
 
 ## Design decisions
 

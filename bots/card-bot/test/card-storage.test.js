@@ -259,3 +259,36 @@ test('booting with a different key than the cards were sealed with fails', async
     rmSync(inv.dir, { recursive: true, force: true });
   }
 });
+
+test('startup scrubs after migration committed without a completed scrub', async () => {
+  const dir = tempDir();
+  const vault = createCardVault(randomBytes(32));
+  const deleted = Array.from({ length: 400 }, (_, i) => ({
+    card_number: String(5555555500000000n + BigInt(i)), mm: '09', yy: '2031', cvv: '6847',
+  }));
+  let db;
+  try {
+    const dbPath = await plaintextDatabase(dir, deleted);
+    db = openDb({ dbPath });
+    db.runScript('PRAGMA secure_delete = ON');
+    await runMigrations({ db, migrationsDir: MIGRATIONS, context: { vault } });
+    db.close();
+    db = null;
+    assert.ok(plaintextFound(dbPath, deleted).includes(deleted[0].card_number), 'committed migration alone leaves historical plaintext');
+
+    db = await openInventory({ dbPath, migrationsDir: MIGRATIONS, vault });
+    assert.deepEqual(plaintextFound(dbPath, [...CARDS, ...deleted]), [], 'database, WAL and shm contain no card secrets');
+    assert.deepEqual(db.all('SELECT * FROM cards ORDER BY id').map((row) => vault.open(row)), CARDS.slice(0, 2).map((c) => ({ zip: null, ...c })));
+    assert.deepEqual(vault.open(db.get(`SELECT * FROM card_sessions WHERE message_id = 'm1'`)), CARDS[2]);
+    const marker = db.get(`SELECT value FROM settings WHERE key = 'storage_scrubbed_at'`).value;
+    assert.ok(Number(marker) > 0);
+    db.close();
+    db = null;
+
+    db = await openInventory({ dbPath, migrationsDir: MIGRATIONS, vault });
+    assert.equal(db.get(`SELECT value FROM settings WHERE key = 'storage_scrubbed_at'`).value, marker, 'completed scrub is not repeated');
+  } finally {
+    db?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

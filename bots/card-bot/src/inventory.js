@@ -19,31 +19,37 @@ const sealedValues = (sealed) => SEALED_COLUMNS.map((col) => sealed[col]);
  * Open the card database, bring its schema up to date, and check that the
  * configured key can open the cards already in it.
  *
- * secure_delete makes SQLite zero deleted content, so the plaintext rows the
- * seal migration replaces do not linger in free pages. The truncating checkpoint
- * empties the WAL, which can still hold page images written by older code.
+ * Scrub once per database and record completion in settings, retrying until it
+ * succeeds. The truncating checkpoint removes old page images from the WAL.
  */
 export async function openInventory({ dbPath, migrationsDir, vault, logger }) {
   const db = openDb({ dbPath, logger });
-  db.runScript('PRAGMA secure_delete = ON');
-  const { applied } = await runMigrations({ db, migrationsDir, logger, context: { vault } });
-  if (applied.includes('016_seal_cards.js')) db.runScript('VACUUM');
-  db.runScript('PRAGMA wal_checkpoint(TRUNCATE)');
+  try {
+    db.runScript('PRAGMA secure_delete = ON');
+    await runMigrations({ db, migrationsDir, logger, context: { vault } });
+    if (!db.get(`SELECT 1 FROM settings WHERE key = 'storage_scrubbed_at'`)) {
+      db.runScript('VACUUM');
+      db.run(`INSERT OR REPLACE INTO settings (key, value) VALUES ('storage_scrubbed_at', ?)`, String(Date.now()));
+    }
+    db.runScript('PRAGMA wal_checkpoint(TRUNCATE)');
 
-  const foreign = db.get(
-    `SELECT key_id FROM cards WHERE key_id != ?
-     UNION ALL SELECT key_id FROM card_sessions WHERE key_id != ?
-     LIMIT 1`,
-    vault.keyId,
-    vault.keyId,
-  );
-  if (foreign) {
-    db.close();
-    throw new Error(
-      `${dbPath} holds cards sealed with key id ${foreign.key_id}, but CARD_ENCRYPTION_KEY has key id ${vault.keyId}. Restore the key those cards were sealed with.`,
+    const foreign = db.get(
+      `SELECT key_id FROM cards WHERE key_id != ?
+       UNION ALL SELECT key_id FROM card_sessions WHERE key_id != ?
+       LIMIT 1`,
+      vault.keyId,
+      vault.keyId,
     );
+    if (foreign) {
+      throw new Error(
+        `${dbPath} holds cards sealed with key id ${foreign.key_id}, but CARD_ENCRYPTION_KEY has key id ${vault.keyId}. Restore the key those cards were sealed with.`,
+      );
+    }
+    return db;
+  } catch (err) {
+    db.close();
+    throw err;
   }
-  return db;
 }
 
 /**
@@ -476,6 +482,7 @@ export function removeStockPointer(db, messageId) {
  * Put a card session's sealed card back into the active card pool. Used by the Return
  * button. Inserts at the head of the provider's stock so the next /card claim picks it
  * up first. `session` needs provider_id, message_id and the sealed columns.
+ * Returns true when restocked, or false when the session was already gone.
  */
 export function returnCardToPool(db, session) {
   // To put it FIRST, take the current minimum id and use min - 1 (allowed in SQLite).

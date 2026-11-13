@@ -140,7 +140,8 @@ A card is opened in memory in two places only: when it is handed to the employee
 
 card-bot refuses to start if `CARD_ENCRYPTION_KEY` is missing or malformed, or if the database holds cards sealed with a different key.
 Migration `016_seal_cards.js` converts a database from before encryption in place under SQLite's `secure_delete`.
-The upgrade then runs `VACUUM` to discard historical plaintext in free pages and truncates the WAL.
+After migrating, card-bot runs `VACUUM` once per database to discard historical plaintext in free pages, records completion in settings, and truncates the WAL.
+If the scrub fails, startup fails and the next start retries it.
 
 Key rotation is not implemented yet.
 The stored key id is there so it can be added.
