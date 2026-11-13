@@ -48,6 +48,7 @@ import {
   setMixMode,
   toggleProviderInMix,
   exportCardsForProvider,
+  listCardsForBrowser,
   deleteProvider,
   eraseProviderCards,
   editProvider,
@@ -55,6 +56,7 @@ import {
 import {
   cardEmbed,
   cardFinalEmbed,
+  maskedCard,
   statusContainer,
   v2Payload,
   errorPayload,
@@ -207,13 +209,13 @@ function buildCardComponents(bot) {
   return [row];
 }
 
-export function cardHandler({ db, env, bot, logger, repoRoot }) {
+export function cardHandler({ db, vault, bot, logger, repoRoot }) {
   const openGate = requireOpen(repoRoot);
   const gate = requireFeature(db, 'card');
   return async function (interaction) {
     if (!(await openGate(interaction))) return;
     if (!(await gate(interaction))) return;
-    const result = claimCard(db);
+    const result = claimCard(db, vault);
     if (!result) {
       await postError(interaction, 'No cards available, all providers are empty.');
       return;
@@ -228,20 +230,12 @@ export function cardHandler({ db, env, bot, logger, repoRoot }) {
       );
       replyMsg = await interaction.fetchReply();
     } catch (err) {
-      returnCardToPool(db, {
-        provider_id: result.provider.id,
-        card_number: result.card.card_number,
-        mm: result.card.mm,
-        yy: result.card.yy,
-        cvv: result.card.cvv,
-        zip: result.card.zip ?? null,
-        message_id: null,
-      });
+      returnCardToPool(db, { ...result.sealed, message_id: null });
       logger?.error(
         {
           err: err.message,
           provider: result.provider.id,
-          cardLast4: result.card.card_number.slice(-4),
+          cardLast4: result.sealed.last4,
         },
         'card claim discord failure — card returned to pool',
       );
@@ -251,9 +245,8 @@ export function cardHandler({ db, env, bot, logger, repoRoot }) {
       messageId: replyMsg.id,
       userId: interaction.user.id,
       providerId: result.provider.id,
-      card: result.card,
+      sealed: result.sealed,
     });
-    void env;
     await maybeAlertLowStock(interaction, {
       db,
       kind: 'card',
@@ -265,7 +258,7 @@ export function cardHandler({ db, env, bot, logger, repoRoot }) {
         userId: interaction.user.id,
         provider: result.provider.id,
         messageId: replyMsg.id,
-        cardLast4: result.card.card_number.slice(-4),
+        cardLast4: result.sealed.last4,
       },
       'card claimed',
     );
@@ -291,23 +284,23 @@ export function cardActionHandler({ db, bot, logger }) {
       zip: null,
     };
 
-    const cardLast4 = session.card_number.slice(-4);
+    const cardLast4 = session.last4;
     if (action === 'used') {
       closeCardSession(db, interaction.message.id);
-      await interaction.update(cardFinalEmbed({ card: session, provider, action: 'used' }));
+      await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'used' }));
       logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card marked used');
       return;
     }
     if (action === 'error') {
       closeCardSession(db, interaction.message.id);
-      await interaction.update(cardFinalEmbed({ card: session, provider, action: 'error' }));
+      await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'error' }));
       logger?.warn({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card flagged as error');
       return;
     }
     if (action === 'return') {
       returnCardToPool(db, session);
       closeCardSession(db, interaction.message.id); // match 'used'/'error': don't leave an orphan session row
-      await interaction.update(cardFinalEmbed({ card: session, provider, action: 'returned' }));
+      await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'returned' }));
       logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card returned to pool');
       return;
     }
@@ -542,20 +535,7 @@ function cardsBrowserPanel(bot, db, filter = 'all', page = 0) {
   const validFilter =
     filter === 'all' || providers.some((p) => p.id === filter) ? filter : 'all';
 
-  const rows =
-    validFilter === 'all'
-      ? db.all(
-          `SELECT provider_id, card_number, mm, yy, cvv, zip
-           FROM cards
-           ORDER BY provider_id, id`,
-        )
-      : db.all(
-          `SELECT provider_id, card_number, mm, yy, cvv, zip
-           FROM cards
-           WHERE provider_id = ?
-           ORDER BY id`,
-          validFilter,
-        );
+  const rows = listCardsForBrowser(db, validFilter === 'all' ? null : validFilter);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PREVIEW_PAGE_SIZE));
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
@@ -568,10 +548,7 @@ function cardsBrowserPanel(bot, db, filter = 'all', page = 0) {
       ? '_No cards in this view._'
       : '```\n' +
         slice
-          .map((c) => {
-            const zipPart = c.zip ? `  ${c.zip}` : '';
-            return `[${c.provider_id}] ${c.card_number}  ${c.mm}/${c.yy}  ${c.cvv}${zipPart}`;
-          })
+          .map((c) => `[${c.provider_id}] ${maskedCard(c.last4)}`)
           .join('\n') +
         '\n```';
 
@@ -975,7 +952,7 @@ export function providersDeleteModalHandler({ db, env, bot, logger }) {
  * /load cards|emails — unified loader. Subcommand picks the type; the handler
  * dispatches to the right parser + table.
  */
-export function loadHandler({ db, env, bot, logger }) {
+export function loadHandler({ db, env, vault, logger }) {
   const gate = requireAdmin(env);
   return async function (interaction) {
     if (!(await gate(interaction))) return;
@@ -1016,7 +993,7 @@ export function loadHandler({ db, env, bot, logger }) {
         await channel.send({ content: '❌ No valid card lines found in that file.' });
         return;
       }
-      const { inserted, skipped } = loadCards(db, provider, parsed, { mode });
+      const { inserted, skipped } = loadCards(db, vault, provider, parsed, { mode });
       logger?.info({ provider, inserted, skipped, mode }, 'loaded cards');
         const skippedNote = skipped > 0 ? ` (skipped ${skipped} duplicate${skipped === 1 ? '' : 's'})` : '';
       await channel.send({
@@ -1028,11 +1005,11 @@ export function loadHandler({ db, env, bot, logger }) {
 }
 
 /**
- * /export cards|emails — DMs the admin a .txt dump of the chosen provider's
- * data, in the same format /load expects on re-import. Ephemeral so sensitive
- * data (card numbers, account passwords) doesn't broadcast to the channel.
+ * /export cards: replies with a .txt of the chosen provider's cards, opened, in the
+ * same format /load expects on re-import. The reply is ephemeral, so only the admin
+ * who ran it can see the file.
  */
-export function exportHandler({ db, env, logger }) {
+export function exportHandler({ db, env, vault, logger }) {
   const gate = requireAdmin(env);
   return async function (interaction) {
     if (!(await gate(interaction))) return;
@@ -1048,7 +1025,7 @@ export function exportHandler({ db, env, logger }) {
         await postError(interaction, `Unknown card provider \`${provider}\`.`);
         return;
       }
-      text = exportCardsForProvider(db, provider);
+      text = exportCardsForProvider(db, vault, provider);
       filename = `cards-${provider}.txt`;
     } else {
       return;

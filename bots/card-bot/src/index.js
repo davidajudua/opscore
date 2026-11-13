@@ -3,13 +3,12 @@ import { fileURLToPath } from 'node:url';
 import {
   createBotLogger,
   loadEnv,
-  openDb,
-  runMigrations,
   DiscordBot,
   GatewayIntentBits,
 } from '@platform/bot-core';
 import { envSchema } from './env-schema.js';
-import { expireOldSessions } from './inventory.js';
+import { createCardVault } from './card-vault.js';
+import { expireOldSessions, openInventory } from './inventory.js';
 import {
   cardCmd,
   cardHandler,
@@ -56,8 +55,13 @@ async function main() {
     level: env.LOG_LEVEL,
   });
 
-  const db = openDb({ dbPath: path.join(botRoot, 'data', 'card.db'), logger });
-  await runMigrations({ db, migrationsDir: path.join(botRoot, 'migrations'), logger });
+  const vault = createCardVault(env.CARD_ENCRYPTION_KEY);
+  const db = await openInventory({
+    dbPath: path.join(botRoot, 'data', 'card.db'),
+    migrationsDir: path.join(botRoot, 'migrations'),
+    vault,
+    logger,
+  });
 
   const bot = new DiscordBot({
     token: env.DISCORD_TOKEN,
@@ -68,7 +72,7 @@ async function main() {
     logger: logger.child({ module: 'discord' }),
   });
 
-  const ctx = { db, env, logger, bot, repoRoot };
+  const ctx = { db, env, vault, logger, bot, repoRoot };
 
   bot
     .command(cardCmd, cardHandler(ctx))

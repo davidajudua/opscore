@@ -1,9 +1,49 @@
 /**
  * Card / provider / whitelist persistence helpers.
  *
- * The cards table is "consume on claim" — claimed cards are deleted so the same card
+ * The cards table is "consume on claim": claimed cards are deleted so the same card
  * is never handed out twice across restarts.
+ *
+ * Card rows hold sealed cards only (see card-vault.js). Card fields are read in
+ * plaintext in exactly two places, claimCard and exportCardsForProvider, and both
+ * go through the vault.
  */
+
+import { openDb, runMigrations } from '@platform/bot-core/db';
+import { SEALED_COLUMNS } from './card-vault.js';
+
+const SEALED_LIST = SEALED_COLUMNS.join(', ');
+const sealedValues = (sealed) => SEALED_COLUMNS.map((col) => sealed[col]);
+
+/**
+ * Open the card database, bring its schema up to date, and check that the
+ * configured key can open the cards already in it.
+ *
+ * secure_delete makes SQLite zero deleted content, so the plaintext rows the
+ * seal migration replaces do not linger in free pages. The truncating checkpoint
+ * empties the WAL, which can still hold page images written by older code.
+ */
+export async function openInventory({ dbPath, migrationsDir, vault, logger }) {
+  const db = openDb({ dbPath, logger });
+  db.runScript('PRAGMA secure_delete = ON');
+  await runMigrations({ db, migrationsDir, logger, context: { vault } });
+  db.runScript('PRAGMA wal_checkpoint(TRUNCATE)');
+
+  const foreign = db.get(
+    `SELECT key_id FROM cards WHERE key_id != ?
+     UNION ALL SELECT key_id FROM card_sessions WHERE key_id != ?
+     LIMIT 1`,
+    vault.keyId,
+    vault.keyId,
+  );
+  if (foreign) {
+    db.close();
+    throw new Error(
+      `${dbPath} holds cards sealed with key id ${foreign.key_id}, but CARD_ENCRYPTION_KEY has key id ${vault.keyId}. Restore the key those cards were sealed with.`,
+    );
+  }
+  return db;
+}
 
 /**
  * Wipe every table. Used by /purge for "starting over" (e.g. switching the bot to a
@@ -71,15 +111,17 @@ export function cardCount(db, providerId) {
 /**
  * Dump every card in a provider to the same line format /load expects:
  *   number,mm,yy,cvv[,zip]
- * Returns a single string with one line per card.
+ * Returns a single string with one line per card. The string is the only
+ * plaintext copy and is never written to disk.
  */
-export function exportCardsForProvider(db, providerId) {
+export function exportCardsForProvider(db, vault, providerId) {
   const rows = db.all(
-    `SELECT card_number, mm, yy, cvv, zip FROM cards WHERE provider_id = ? ORDER BY id`,
+    `SELECT ${SEALED_LIST} FROM cards WHERE provider_id = ? ORDER BY id`,
     providerId,
   );
   return rows
-    .map((c) => {
+    .map((row) => {
+      const c = vault.open(row);
       const base = [c.card_number, c.mm, c.yy, c.cvv];
       if (c.zip) base.push(c.zip);
       return base.join(',');
@@ -271,11 +313,11 @@ export function getMixProviderIds(db) {
 }
 
 /**
- * Append a batch of cards to a provider. Returns { inserted, skipped }.
+ * Seal and append a batch of cards to a provider. Returns { inserted, skipped }.
  * `parsed` is an array of { card_number, mm, yy, cvv, zip? }.
  * `mode` is 'append' (default) or 'replace' (clears existing cards for that provider).
  */
-export function loadCards(db, providerId, parsed, { mode = 'append' } = {}) {
+export function loadCards(db, vault, providerId, parsed, { mode = 'append' } = {}) {
   // Loading more cards re-arms low-stock alerts for this provider.
   clearAlertsForPrefix(db, `card:${providerId}`);
   const txn = db.transaction(() => {
@@ -283,16 +325,12 @@ export function loadCards(db, providerId, parsed, { mode = 'append' } = {}) {
     let inserted = 0;
     let skipped = 0;
     for (const c of parsed) {
-      // INSERT OR IGNORE — UNIQUE(provider_id, card_number) silently dedups.
+      // INSERT OR IGNORE: UNIQUE(provider_id, fingerprint) silently dedups.
       const result = db.run(
-        `INSERT OR IGNORE INTO cards (provider_id, card_number, mm, yy, cvv, zip, added_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO cards (provider_id, ${SEALED_LIST}, added_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         providerId,
-        c.card_number,
-        c.mm,
-        c.yy,
-        c.cvv,
-        c.zip ?? null,
+        ...sealedValues(vault.seal(c)),
         Date.now(),
       );
       if (result.changes === 1) inserted++;
@@ -313,9 +351,11 @@ export function loadCards(db, providerId, parsed, { mode = 'append' } = {}) {
  *              falls through to the others (so a single-empty provider doesn't
  *              stall the queue). If the mix is empty we fall back to the full list.
  *   'all'    — iterate every provider in insertion order.
- * Returns the claimed card row + provider, or null if all stocks are empty.
+ * Returns { provider, sealed, card } or null if all stocks are empty. `sealed` is
+ * the stored row, `card` is its plaintext for the worker who claimed it. The card
+ * is opened before it is deleted, so a card that cannot be opened stays in stock.
  */
-export function claimCard(db) {
+export function claimCard(db, vault) {
   const txn = db.transaction(() => {
     const mode = getCardMode(db);
     const providers = listProviders(db);
@@ -344,9 +384,10 @@ export function claimCard(db) {
         p.id,
       );
       if (card) {
+        const plain = vault.open(card);
         db.run(`DELETE FROM cards WHERE id = ?`, card.id);
         if (mode === 'mix') setLastMixProvider(db, p.id);
-        return { card, provider: p };
+        return { provider: p, sealed: card, card: plain };
       }
     }
     return null;
@@ -359,21 +400,18 @@ export function claimCard(db) {
 /**
  * Record a session for an in-flight card claim. Keyed by the Discord message id of the
  * `/card` reply so the Used / Error / Return buttons can look up the session by message.
+ * The session keeps the card sealed, so Return can restock it without opening it.
  */
-export function openCardSession(db, { messageId, userId, providerId, card }) {
+export function openCardSession(db, { messageId, userId, providerId, sealed }) {
   const now = Date.now();
   db.run(
     `INSERT INTO card_sessions
-       (message_id, user_id, provider_id, card_number, mm, yy, cvv, zip, claimed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (message_id, user_id, provider_id, ${SEALED_LIST}, claimed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     messageId,
     userId,
     providerId,
-    card.card_number,
-    card.mm,
-    card.yy,
-    card.cvv,
-    card.zip ?? null,
+    ...sealedValues(sealed),
     now,
   );
   db.run(
@@ -431,8 +469,9 @@ export function removeStockPointer(db, messageId) {
 }
 
 /**
- * Put a card session's card data back into the active card pool. Used by the Return button.
- * Inserts at the head of the provider's stock so the next /card claim picks it up first.
+ * Put a card session's sealed card back into the active card pool. Used by the Return
+ * button. Inserts at the head of the provider's stock so the next /card claim picks it
+ * up first. `session` needs provider_id, message_id and the sealed columns.
  */
 export function returnCardToPool(db, session) {
   // Returning a card to the pool re-arms low-stock alerts for that provider.
@@ -445,20 +484,26 @@ export function returnCardToPool(db, session) {
     );
     const newId = minRow?.min_id != null ? minRow.min_id - 1 : 1;
     db.run(
-      `INSERT INTO cards (id, provider_id, card_number, mm, yy, cvv, zip, added_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO cards (id, provider_id, ${SEALED_LIST}, added_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       newId,
       session.provider_id,
-      session.card_number,
-      session.mm,
-      session.yy,
-      session.cvv,
-      session.zip ?? null,
+      ...sealedValues(session),
       Date.now(),
     );
     db.run(`DELETE FROM card_sessions WHERE message_id = ?`, session.message_id);
   });
   txn();
+}
+
+/**
+ * Cards for the /providers browser: provider and last four digits only. The
+ * browser never opens a card.
+ */
+export function listCardsForBrowser(db, providerId = null) {
+  return providerId
+    ? db.all(`SELECT provider_id, last4 FROM cards WHERE provider_id = ? ORDER BY id`, providerId)
+    : db.all(`SELECT provider_id, last4 FROM cards ORDER BY provider_id, id`);
 }
 
 export function cardCounts(db) {

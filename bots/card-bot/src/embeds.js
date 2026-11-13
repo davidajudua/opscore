@@ -88,13 +88,13 @@ function buildCardActionRow(bot) {
   );
 }
 
-function cardContainer({ card, provider, accentColor }) {
+function cardContainer({ card, provider }) {
   const expDate =
     card.mm && card.yy
       ? `${card.mm}/${Number(card.yy) < 100 ? '20' + String(card.yy).padStart(2, '0') : card.yy}`
       : (provider.exp_date ?? 'N/A');
   const zip = card.zip ?? provider.zip ?? 'N/A';
-  const c = new ContainerBuilder()
+  return new ContainerBuilder()
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`### Provider: ${provider.name}`),
     )
@@ -102,25 +102,36 @@ function cardContainer({ card, provider, accentColor }) {
     .addTextDisplayComponents(labeledBlock('CVV', card.cvv))
     .addTextDisplayComponents(labeledBlock('Exp Date', expDate))
     .addTextDisplayComponents(labeledBlock('Zip Code', zip));
-  if (accentColor != null) c.setAccentColor(accentColor);
-  return c;
 }
 
+/** How a card number appears everywhere except the claim message itself. */
+export function maskedCard(last4) {
+  return `•••• ${last4}`;
+}
+
+/** The claim message: the one place a full card is shown, to the worker who claimed it. */
 export function cardEmbed({ card, provider, bot }) {
   const c = cardContainer({ card, provider });
   c.addActionRowComponents(buildCardActionRow(bot));
   return v2Payload(c);
 }
 
-export function cardFinalEmbed({ card, provider, action }) {
+/**
+ * Replaces the claim message once the worker presses Used, Error or Return, so the
+ * full number and CVV stop being visible in the channel.
+ */
+export function cardFinalEmbed({ last4, provider, action }) {
   const accent =
     action === 'used' ? COLOR_OK : action === 'error' ? COLOR_ERR : COLOR_WARN;
   const label =
     action === 'used' ? 'Used' : action === 'error' ? 'Errored' : 'Returned';
-  const c = cardContainer({ card, provider, accentColor: accent });
-  c.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`_${label}_`),
-  );
+  const c = new ContainerBuilder()
+    .setAccentColor(accent)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`### Provider: ${provider.name}`),
+    )
+    .addTextDisplayComponents(labeledBlock('Card Number', maskedCard(last4)))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`_${label}_`));
   return v2Payload(c);
 }
 
