@@ -1164,13 +1164,13 @@ export function statsButtonHandler({ db, env, bot }) {
 }
 
 /**
- * Midnight cleanup. Wipes everything safe to reset on a daily cadence:
- *   - claim_history (cards) — stats source
- *   - stock_alerts — re-arms low-stock countdown notifications
- *   - orphan card sessions older than 24h — abandoned claims
+ * Weekly cleanup, run by scheduleWeeklyStatsReset. Wipes:
+ *   - claim_history (cards) - stats source
+ *   - stock_alerts - re-arms low-stock countdown notifications
+ *   - orphan card sessions older than 24h - abandoned claims
  * Then bumps stats_clear_at so /stats reads cleanly past the cut.
  */
-export function resetDailyStats(db) {
+export function resetWeeklyStats(db) {
   purgeClaimHistory(db);
   purgeStockAlerts(db);
   purgeOrphanSessions(db);
@@ -1187,7 +1187,7 @@ export function resetDailyStats(db) {
 export function scheduleWeeklyStatsReset(db, logger) {
   const fire = () => {
     try {
-      resetDailyStats(db);
+      resetWeeklyStats(db);
       logger?.info('weekly stats auto-cleared at Monday 12 AM EST');
     } catch (err) {
       logger?.warn({ err: err.message }, 'weekly stats clear failed');
