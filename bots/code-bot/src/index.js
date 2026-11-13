@@ -50,7 +50,7 @@ async function main() {
   });
 
   const db = openDb({ dbPath: path.join(botRoot, 'data', 'queue.db'), logger });
-  runMigrations({ db, migrationsDir: path.join(botRoot, 'migrations'), logger });
+  await runMigrations({ db, migrationsDir: path.join(botRoot, 'migrations'), logger });
 
   // One queue per provider. WorkerQueue creates its backing table
   // (queue_codebot_<provider>) on demand — no migration needed.

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { pathToFileURL } from 'node:url';
 
 /**
  * Open (or create) a SQLite database at `dbPath`. Uses Node's built-in `node:sqlite`
@@ -92,10 +93,22 @@ export function openDb({ dbPath, logger, readonly = false }) {
 }
 
 /**
- * Run all migrations in `migrationsDir` that haven't been applied yet, in lex order.
- * Migration filenames must sort correctly — convention: `001_init.sql`, `002_*.sql`...
+ * Run every migration in `migrationsDir` that has not been applied yet, in lexical
+ * filename order (`001_init.sql`, `002_*.sql`, ...). Each one runs in its own
+ * transaction together with its `_migrations` row, so a failure leaves no trace.
+ *
+ * A migration is either:
+ *   - `NNN_name.sql`: a SQL script.
+ *   - `NNN_name.js`:  an ES module exporting a synchronous `up(db, context)`, for
+ *     changes SQL cannot express (for example re-encoding existing rows).
+ *
+ * @param {object} opts
+ * @param {ReturnType<typeof openDb>} opts.db
+ * @param {string} opts.migrationsDir
+ * @param {object} [opts.logger]
+ * @param {object} [opts.context]  Passed to every `.js` migration's `up` as its second argument.
  */
-export function runMigrations({ db, migrationsDir, logger }) {
+export async function runMigrations({ db, migrationsDir, logger, context = {} }) {
   if (!existsSync(migrationsDir)) {
     if (logger) logger.debug({ migrationsDir }, 'no migrations directory');
     return { applied: [] };
@@ -109,7 +122,7 @@ export function runMigrations({ db, migrationsDir, logger }) {
   `);
 
   const files = readdirSync(migrationsDir)
-    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => f.endsWith('.sql') || f.endsWith('.js'))
     .sort();
 
   const applied = new Set(db.all(`SELECT name FROM _migrations`).map((r) => r.name));
@@ -118,9 +131,9 @@ export function runMigrations({ db, migrationsDir, logger }) {
   for (const file of files) {
     if (applied.has(file)) continue;
 
-    const sql = readFileSync(path.join(migrationsDir, file), 'utf8');
+    const apply = await loadMigration(path.join(migrationsDir, file));
     const txn = db.transaction(() => {
-      db.runScript(sql);
+      apply(db, context);
       db.run(`INSERT INTO _migrations (name, applied_at) VALUES (?, ?)`, file, Date.now());
     });
     txn();
@@ -130,4 +143,24 @@ export function runMigrations({ db, migrationsDir, logger }) {
   }
 
   return { applied: newlyApplied };
+}
+
+/** Turn a migration file into one synchronous `(db, context) => void` step. */
+async function loadMigration(file) {
+  if (file.endsWith('.sql')) {
+    const sql = readFileSync(file, 'utf8');
+    return (db) => db.runScript(sql);
+  }
+
+  const { up } = await import(pathToFileURL(file).href);
+  if (typeof up !== 'function') {
+    throw new Error(`migration ${path.basename(file)} must export a function named up`);
+  }
+  return (db, context) => {
+    const result = up(db, context);
+    // node:sqlite is synchronous. An async `up` would keep writing after COMMIT.
+    if (typeof result?.then === 'function') {
+      throw new Error(`migration ${path.basename(file)}: up() must be synchronous`);
+    }
+  };
 }

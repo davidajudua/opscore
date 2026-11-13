@@ -57,7 +57,7 @@ async function main() {
   });
 
   const db = openDb({ dbPath: path.join(botRoot, 'data', 'card.db'), logger });
-  runMigrations({ db, migrationsDir: path.join(botRoot, 'migrations'), logger });
+  await runMigrations({ db, migrationsDir: path.join(botRoot, 'migrations'), logger });
 
   const bot = new DiscordBot({
     token: env.DISCORD_TOKEN,
