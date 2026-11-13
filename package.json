@@ -5,7 +5,7 @@
   "description": "Independent Discord bots for internal operations that share one Node core and run under PM2.",
   "type": "module",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.13.0"
   },
   "workspaces": [
     "packages/*",
