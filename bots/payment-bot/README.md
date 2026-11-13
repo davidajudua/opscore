@@ -11,7 +11,11 @@ Each alert email is booked once, keyed by its IMAP UID.
 2. **Parsing.** Only mail whose From address exactly matches one of the rail's known senders is parsed, for example `venmo@venmo.com`. Each rail's `parse()` in `providers.js` returns the payer's name and amount, or `null` for anything that is not an inbound payment.
 3. **Ledger.** `recordPayment` inserts the payment with the IMAP UID as `external_id`. A partial unique index on `(method, external_id)` rejects a second insert of the same email, so each alert email is booked and posted once, keyed by its IMAP UID.
 4. **Discord.** Each new payment is posted to `DISCORD_PAYMENT_CHANNEL_ID`, and every saved `/dashboard` message is edited to show the new totals.
-5. **Crypto.** `/crypto` takes a transaction hash or a block explorer link, looks it up on its chain, and prices it in USD at the time it was sent. It is booked only if it paid one of the `CRYPTO_ADDRESS_*` addresses, with the transaction hash as `external_id`.
+5. **Crypto.** `/crypto` takes a transaction hash or a block explorer link and looks it up on its chain.
+   Native coins (BTC, ETH, LTC, SOL, TRX and EVM chains' native coins) use the USD daily price for the day the transaction was sent, using CryptoCompare's daily close with CoinGecko's daily price as a fallback.
+   Stablecoin tokens USDC, USDT, DAI, BUSD, FRAX, TUSD and USDbC count as $1 each.
+   Other tokens use their current price when the command runs.
+   It is booked only if it paid one of the `CRYPTO_ADDRESS_*` addresses, with the transaction hash as `external_id`.
 
 The root [README](../../README.md#how-a-payment-gets-confirmed) has a diagram of this flow.
 
