@@ -2,7 +2,7 @@
   "name": "bot-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "A Discord automation platform — independent bots sharing a single Node core, managed under PM2.",
+  "description": "Independent Discord bots for internal operations that share one Node core and run under PM2.",
   "type": "module",
   "engines": {
     "node": ">=22.5.0"
@@ -13,8 +13,6 @@
   ],
   "scripts": {
     "lint": "eslint .",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
     "test:core": "npm test -w @platform/bot-core",
     "dev:code": "npm run dev -w code-bot",
@@ -29,7 +27,6 @@
   "devDependencies": {
     "@eslint/js": "9.39.4",
     "eslint": "^9.13.0",
-    "globals": "^14.0.0",
-    "prettier": "^3.3.3"
+    "globals": "^14.0.0"
   }
 }
