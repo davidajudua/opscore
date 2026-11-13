@@ -34,14 +34,17 @@ function visible(payload) {
   ) + (payload.content ?? '');
 }
 
-function interaction({ admin = false, userId = 'worker', messageId, options = {} } = {}) {
+let interactionSequence = 0;
+
+function interaction({ admin = false, userId = 'worker', messageId, originId, options = {} } = {}) {
   const sent = [];
   return {
     sent,
+    id: `interaction-${++interactionSequence}`,
     channelId: 'chan',
     user: { id: userId },
     member: { roles: { cache: new Map(admin ? [['r', { name: 'owner' }]] : []) } },
-    message: messageId ? { id: messageId } : undefined,
+    message: messageId ? { id: messageId, ...(originId ? { interactionMetadata: { id: originId, user: { id: 'worker' } } } : {}) } : undefined,
     replied: false,
     deferred: false,
     options: { getString: (name) => options[name] ?? null },
@@ -244,8 +247,8 @@ test('a failed Return transaction keeps the session and lets Used close it', asy
   }
 });
 
-for (const action of ['used', 'error', 'return']) {
-  test(`${action} during claim publication preserves the message until registration`, async () => {
+for (const [action, presser] of ['used', 'error', 'return'].flatMap((action) => [[action, 'worker'], [action, 'other-worker']])) {
+  test(`${action} by ${presser} during publication preserves the message until registration`, async () => {
     const { ctx, cleanup } = await setup();
     try {
       const claim = interaction();
@@ -258,7 +261,7 @@ for (const action of ['used', 'error', 'return']) {
       };
       const pending = cardHandler(ctx)(claim);
       await fetching;
-      const press = interaction({ messageId: 'claim-msg' });
+      const press = interaction({ messageId: 'claim-msg', originId: claim.id, userId: presser });
       let edits = 0;
       press.update = async () => { edits++; };
       await cardActionHandler(ctx)(press, [action]);
@@ -269,7 +272,7 @@ for (const action of ['used', 'error', 'return']) {
       finishFetch({ id: 'claim-msg' });
       await pending;
       assert.ok(getCardSession(ctx.db, 'claim-msg'));
-      const retry = interaction({ messageId: 'claim-msg' });
+      const retry = interaction({ messageId: 'claim-msg', originId: claim.id });
       await cardActionHandler(ctx)(retry, [action]);
       assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
       assert.equal(cardCount(ctx.db, 'amex'), action === 'return' ? 2 : 1);
@@ -298,16 +301,23 @@ test('concurrent publications for one worker stay pending until both finish', as
     await started;
     releases[0]({ id: 'first' });
     await pending[0];
-    const press = interaction({ messageId: 'second' });
+    const press = interaction({ messageId: 'second', originId: claims[1].id });
     await cardActionHandler(ctx)(press, ['return']);
     assert.match(visible(press.sent[0]), /still being set up/);
+    for (const originId of [undefined, 'finished-interaction']) {
+      const expired = interaction({ messageId: 'expired', originId });
+      await cardActionHandler(ctx)(expired, ['return']);
+      assert.match(visible(expired.sent[0]), /claim is closed/);
+      assert.deepEqual(buttons(expired.sent[0]), []);
+      for (const secret of SECRETS) assert.ok(!visible(expired.sent[0]).includes(secret));
+    }
     releases[1]({ id: 'second' });
     await pending[1];
     const handler = cardActionHandler(ctx);
     await handler(interaction({ messageId: 'first' }), ['return']);
     await handler(interaction({ messageId: 'second' }), ['return']);
     assert.equal(cardCount(ctx.db, 'amex'), 2);
-    const closed = interaction({ messageId: 'second' });
+    const closed = interaction({ messageId: 'second', originId: claims[1].id });
     await handler(closed, ['return']);
     assert.match(visible(closed.sent[0]), /claim is closed/);
   } finally {

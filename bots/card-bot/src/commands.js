@@ -189,7 +189,7 @@ function requireAdmin(env) {
 
 /* ============================================================== /card */
 
-const publishingClaims = new Map();
+const publishingClaims = new Set();
 
 export function cardHandler({ db, vault, bot, logger, repoRoot }) {
   const openGate = requireOpen(repoRoot);
@@ -202,8 +202,7 @@ export function cardHandler({ db, vault, bot, logger, repoRoot }) {
       await postError(interaction, 'No cards available, all providers are empty.');
       return;
     }
-    const userId = interaction.user.id;
-    publishingClaims.set(userId, (publishingClaims.get(userId) ?? 0) + 1);
+    publishingClaims.add(interaction.id);
     let replyMsg;
     try {
       // Discord network calls can fail (5xx, rate limit, timeout). If reply or
@@ -233,9 +232,7 @@ export function cardHandler({ db, vault, bot, logger, repoRoot }) {
         sealed: result.sealed,
       });
     } finally {
-      const remaining = publishingClaims.get(userId) - 1;
-      if (remaining) publishingClaims.set(userId, remaining);
-      else publishingClaims.delete(userId);
+      publishingClaims.delete(interaction.id);
     }
     await maybeAlertLowStock(interaction, {
       db,
@@ -260,7 +257,7 @@ export function cardActionHandler({ db, logger }) {
     const [action] = args;
     const session = getCardSession(db, interaction.message.id);
     if (!session) {
-      if (publishingClaims.has(interaction.user.id)) {
+      if (publishingClaims.has(interaction.message.interactionMetadata?.id)) {
         const payload = errorPayload('This card is still being set up. Press the button again in a moment.');
         await interaction.reply({ ...payload, flags: payload.flags | MessageFlags.Ephemeral });
         return;
