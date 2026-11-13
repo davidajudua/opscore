@@ -1,89 +1,101 @@
 # card-bot
 
-**Hand out single-use cards to a team — one at a time, with tracking — instead of a shared spreadsheet.**
-
-A Discord bot that holds a pool of single-use cards and hands them out on demand via `/card`. The
-canonical use case is a company issuing **employee expense cards** for purchases, but it works for any
-resource handed out one at a time with an audit trail.
-
----
-
-## The problem it solves
-
-Distributing cards by hand is slow and leaky: numbers get copied into DMs and spreadsheets, the same
-card gets handed to two people, no one can say which card went where, and there's no record when
-something goes wrong. card-bot replaces that with a single self-serve flow where **every claim is
-tracked and a card is never handed out twice.**
-
-## Who it's for
-
-Admins who need to distribute cards to a team without manual tracking, and team members who just need
-one card, on demand, without pinging anyone.
+Hands employees cards from the business's own bank accounts, one at a time, with a record of who claimed each card.
+An employee runs `/card` in a whitelisted Discord channel and gets one card.
+That card leaves the pool, so nobody else can be handed it.
 
 ## How it works
 
-1. An admin loads cards into a **provider** (`/load`, CSV/text upload) — providers group cards by
-   issuer and carry a default zip / expiry.
-2. A team member runs `/card` and is handed exactly one card; it's **removed from the pool** so it
-   can't be reissued.
-3. They resolve it with a button:
-   - **Used** — done, the card stays consumed
-   - **Return** — puts it back at the head of the pool (re-arms low-stock alerts)
-   - **Error** — flags it; the claim is closed
-4. A live **stock panel** and low-stock alerts keep admins aware of inventory.
+1. An admin creates a provider with `/providers`. A provider is a named pool of cards, for example one per bank account, with an optional default zip and expiry.
+2. An admin uploads a file with `/load`. Each line is `number,mm,yy,cvv[,zip]`, separated by commas or slashes. Lines whose first field is not all digits, such as a header row, are skipped. card-bot seals each card before it writes it.
+3. An employee runs `/card`. card-bot opens the next card, deletes it from the pool in the same transaction, and replies with the number, CVV, expiry and zip.
+4. The employee presses a button on that message:
+   - **Used** closes the claim.
+   - **Error** closes the claim and logs a warning. The card stays out of the pool.
+   - **Return** puts the card back at the front of its provider's pool.
 
-## Engineering & design decisions
-
-- **Consume-on-claim.** A claimed card is deleted from the pool inside a transaction, so a restart or
-  a double-click can never hand the same card to two people.
-- **Three selection modes, persisted.** `all` (round-robin every provider), `single` (pin one
-  provider, fall through if empty), and `mix` (round-robin a chosen subset). The mode + a round-robin
-  pointer live in a settings table so rotation survives restarts.
-- **Idempotent loads.** `INSERT OR IGNORE` against a `UNIQUE(provider_id, card_number)` index means
-  re-uploading a file silently dedups instead of creating duplicates.
-- **Restart-safe interactions.** Buttons use stable, namespaced custom IDs (`cardbot:cardact:…`) so
-  an in-flight card's buttons keep working across a redeploy.
-- **Low-stock alerts, de-duped.** A per-count alert key fires once as stock crosses each threshold and
-  re-arms on load/return — no alert spam.
-- **Session reaper.** Users often claim a card and forget to click a button; a periodic reaper trims
-  abandoned session rows (cards are *not* auto-returned, since most were used).
-- **Channel whitelisting + admin gating.** `/card` only works in whitelisted channels; pool/admin
-  commands require the configured admin role.
-- **No card data at rest beyond the pool.** Claimed-card details live only in the short-lived session
-  row; nothing sensitive is logged.
+   After any of the three, the message is edited to show the last four digits only.
+5. When a claim leaves a provider with 10 cards or fewer, card-bot posts a low-stock alert, once per count.
 
 ## Commands
 
-| Command | Who | Description |
+| Command | Who can run it | What it does |
 |---|---|---|
-| `/card` | team | Claim one card |
-| `/load` | admin | Upload cards to a provider (append/replace) |
-| `/export` | admin | Download a provider's cards |
-| `/providers` | admin | Manage providers + selection mode (panel) |
-| `/whitelist` | admin | Whitelist the current channel for `/card` |
-| `/stats` | admin | Per-member claim counts (today / week) |
-| `/setprice` | admin | Set the per-card value used in stats |
-| `/purge` | admin | Wipe all bot data (guarded) |
+| `/card` | anyone in a whitelisted channel | Claims one card |
+| `/load` | admin role | Uploads cards into a provider, appending or replacing |
+| `/export` | admin role | Returns a provider's cards in stock as a file |
+| `/providers` | admin role | Creates, edits, erases and deletes providers, sets the selection mode, and browses stock and cards |
+| `/whitelist` | admin role | Turns `/card` on or off for the current channel |
+| `/stats` | admin role | Cards claimed per member today and this week, with their cost at the `/setprice` price |
+| `/setprice` | admin role | Sets the per-card price used by `/stats` |
+| `/purge` | admin role | Deletes all bot data after a confirmation button |
 
-## Architecture
+The admin role is the Discord role named by `ADMIN_ROLE_NAME`, which the template sets to `owner`.
+An empty value matches no role, so nobody could run admin commands.
+
+### What /export returns
+
+`/export type:cards provider:<id>` replies with `cards-<id>.txt`.
+The file has one line per card still in stock, in the order `/card` would hand them out, as `number,mm,yy,cvv[,zip]`.
+Cards out on a claim are not included.
+That is the format `/load` reads, so export, edit, then `/load mode:replace` is how to bulk-edit a provider.
+
+Only members with the admin role can run it.
+The reply is ephemeral, so only the admin who ran it sees the file.
+card-bot opens the cards in memory to build the file and never writes it to disk.
+Once downloaded, the file is a plaintext copy of the cards on that admin's device.
+
+## Card storage
+
+`src/card-vault.js` owns sealing and opening.
+A card in the database is a sealed card:
+
+| Column | Holds |
+|---|---|
+| `ciphertext`, `nonce`, `tag` | The card's number, expiry, CVV and zip, encrypted with AES-256-GCM and a fresh 12-byte nonce |
+| `key_id` | Which key sealed it. A different key refuses to open it. |
+| `fingerprint` | HMAC-SHA256 of the card number. `UNIQUE(provider_id, fingerprint)` rejects a card already in that provider, which a random nonce would otherwise make impossible to detect. The fingerprint is also bound into the ciphertext as authenticated data. |
+| `last4` | The last four digits, for display |
+
+Open claims in `card_sessions` keep the same sealed columns, so **Return** moves a card back into stock without opening it.
+
+The key comes from `CARD_ENCRYPTION_KEY`, 32 random bytes in base64.
+card-bot refuses to start without a valid key, or with a key other than the one that sealed the cards already stored.
+The root [Security section](../../README.md#security) covers backing up the key.
+
+Migration `016_seal_cards.js` upgrades a database from before encryption.
+It rebuilds `cards` and `card_sessions` with sealed columns, drops the plaintext tables, and skips a table that is already sealed.
+`openInventory` turns on `secure_delete` before migrating and truncates the WAL afterwards, so no plaintext stays in the file.
+
+## Design decisions
+
+- **Consume on claim.** `claimCard` opens the card and deletes it inside one transaction. A restart or a double click cannot hand the same card to two people, and a card that fails to open stays in stock.
+- **Three selection modes, stored in SQLite.** `all` takes from the first provider with stock, in creation order. `single` takes from the pinned provider first and falls through to the others when it is empty. `mix` rotates through a chosen set of providers and remembers its place across restarts.
+- **Duplicate loads are skipped.** `INSERT OR IGNORE` against `UNIQUE(provider_id, fingerprint)` skips cards the provider already has, and `/load` reports how many it skipped.
+- **Buttons survive restarts.** Card buttons use ids like `cardbot:cardact:used`, and the open claim is a SQLite row keyed by the Discord message id.
+- **Stale claims are trimmed, not returned.** Every 6 hours card-bot deletes claim rows older than 48 hours, and the Monday stats reset deletes those older than 24 hours. Most of those cards were used without a button press, so they do not go back into stock.
+- **Gated by channel, role and lockdown.** `/card` works only in whitelisted channels, and not while payment-bot's dashboard has the fleet locked.
+
+## Code layout
 
 ```
 src/
-├── inventory.js   # all persistence: pool, providers, sessions, whitelist, stock pointer, stats
-├── embeds.js      # /card, stock panel, and stats Components-V2 builders
-├── commands.js    # slash-command builders + interaction handlers
-└── index.js       # boot: env → db+migrations → Discord → command wiring + session reaper
-migrations/        # schema, applied automatically on first start
+├── card-vault.js   seal and open cards, fingerprints
+├── inventory.js    all SQLite access: providers, sealed cards, claims, whitelist, stats
+├── embeds.js       Discord message builders: claim, resolved claim, stock, stats
+├── commands.js     slash commands and button and modal handlers
+├── env-schema.js   zod schema for .env
+└── index.js        boot: env, key, database and migrations, Discord, claim reaper
+migrations/         schema, applied at startup
 ```
-
-Built on `@platform/bot-core` (config, db+migrations, Discord router, logging).
 
 ## Setup
 
 ```bash
-cp .env.example .env     # Discord token + client/guild id + admin role
+cp .env.example .env
 ```
 
-Start via the platform's PM2 config or `start.bat`. Then, in Discord: `/whitelist` the channel where
-`/card` should work, `/providers` to create a provider, `/load` to fill it, and the team can `/card`.
-The card export format (`number,mm,yy,cvv[,zip]`) round-trips with `/load`.
+Fill in the Discord token, client id, guild id, the admin role name, and `CARD_ENCRYPTION_KEY`.
+`.env.example` shows the command that generates the key.
+Start the bot with the root `install.sh` or `start.bat`.
+Then, in Discord, run `/whitelist` in the channel where `/card` should work, create a provider with `/providers`, and fill it with `/load`.

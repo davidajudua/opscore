@@ -1,65 +1,59 @@
 # code-bot
 
-**Hand out one-time verification codes to a team, on demand, without sharing an inbox.** When several
-people need login/2FA codes for shared business accounts, code-bot fetches the latest code from a
-dedicated mailbox and serves it to whoever asked — one request at a time, with no duplicates.
+Hands out the one-time codes that the business's card accounts send, one employee at a time, without sharing the mailbox they arrive in.
+An employee joins a queue in Discord.
+When it is their turn they press **Get Code**, and the bot finds the newest unused code and posts it to them.
+A code is never handed out twice.
 
----
+## Providers
 
-## The problem it solves
+`/deploy provider:<name>` posts a queue panel for one provider in the current channel.
+Each provider has its own queue and panel.
 
-Shared accounts send their one-time verification codes to a single inbox. If a whole team needs those
-codes, you either share the mailbox password (bad) or someone becomes a human relay (slow). code-bot
-sits on that inbox and turns "what's the code?" into a Discord button: a team member requests a code,
-the bot pulls the freshest matching one, hands it to them, and marks it used so the next person gets a
-different one.
-
-**Who it's for:** an admin who configures which inbox/provider to watch, and team members who just
-need the current code for a shared account without touching the mailbox.
+| Provider | Where codes come from | How a code is matched |
+|---|---|---|
+| `amex` | Amex SafeKey emails in the Proton Mail Bridge mailbox. Optionally also a Discord channel where an SMS forwarder's webhook posts SafeKey texts. | The email body's "Your Verification Code is: 123456", or a webhook message starting "123456 is your ... SafeKey" |
+| `eno` | Capital One purchase notification emails in the same mailbox | The employee types the 3-character code Google Pay shows them, and the bot looks for "at <code> <6 digits>" in the email |
 
 ## How it works
 
-1. An admin **deploys** the bot to a channel for a given provider (`/deploy`).
-2. A team member requests a code; they join a **fair queue** so only one person is served at a time.
-3. The bot fetches the latest matching code — from **IMAP** (a dedicated inbox) or, optionally, a
-   **Discord-webhook fallback** (e.g. an SMS-forwarder posting codes into a channel).
-4. The code is delivered to the requester; it's recorded as **served** so it's never handed out twice.
+1. An employee presses **Request Code** on a panel and joins that provider's queue. Only the person at the front is served.
+2. For `amex`, the employee presses **Get Code** after placing their order. The bot searches the mailbox every 2 seconds for up to 60 seconds. If the webhook source is configured, it searches the webhook channel at the same time, and the first source to find a code wins.
+3. For `eno`, the employee enters their 3-character Google Pay code when they join. The search starts when their turn comes, and runs every 2 seconds for up to 3 minutes, since Capital One emails can be slow.
+4. The bot records the code before it posts it. The email UID, the Discord message id and the code value each go into their own table, and a code already in any of them is skipped. Rows older than an hour are deleted on later searches.
+5. An employee who does nothing for 60 seconds at the front of the queue is skipped, and the next person is served.
 
-## Engineering & design decisions
+## Design decisions
 
-- **Fair, single-active queue.** Built on the platform core's worker queue: one person is served at a
-  time, with an idle timeout so a no-show doesn't block everyone behind them.
-- **Served-code de-duplication.** Every code handed out is recorded; the fetchers skip already-served
-  codes so two requesters never get the same one.
-- **Two fetch sources, same interface.** Primary IMAP fetcher with an optional webhook fallback —
-  configure either or both; with both set, the bot uses IMAP and falls back automatically.
-- **Per-provider deploys.** Different providers (and their distinct email/code formats) get their own
-  channel deployment and parsing rules, so one bot instance can serve several account types.
-- **Restart-safe.** Persistent component IDs and DB-backed sessions mean an in-flight request survives
-  a redeploy.
-- **Secrets stay in `.env`.** Inbox credentials are never committed; the session DB is gitignored.
+- **One person served at a time.** The queue is bot-core's `WorkerQueue`, a SQLite table with one active entry and an idle timeout. Two employees can never race for the same code.
+- **Codes are claimed atomically.** Each source claims with `INSERT OR IGNORE`, so even two fetchers running at once could not return the same email or message.
+- **Deduplicated across sources.** Amex can send one code by both email and text. The `served_code_values` table keys on the code itself, so the second copy is skipped.
+- **Searches by arrival time, to the second.** IMAP `SEARCH SINCE` only filters by day, so the bot searches a wider window and filters on each message's internal date.
+- **State survives restarts.** The queue, the served codes and the panel locations are in SQLite, and panel buttons use stable custom ids.
+- **Secrets stay in `.env`.** The mailbox password is never committed, and `data/` is gitignored.
 
-## Architecture
+## Code layout
 
 ```
 src/
-├── imap-fetcher.js     # pull codes from a dedicated inbox (sender/subject/code regex)
-├── webhook-fetcher.js  # optional fallback: read codes from a Discord channel webhook
-├── session.js          # per-request session state (DB-backed)
-├── deploy.js           # per-provider channel deployment
-├── handlers/           # request / get-code / release / cancel-retry-done / deploy
-└── index.js            # boot: env → db+migrations → Discord → fetchers
+├── imap-fetcher.js     Amex SafeKey codes from the mailbox, and the shared served-code tables
+├── eno-fetcher.js      Capital One codes from the mailbox, matched on the employee's hint
+├── webhook-fetcher.js  Amex SafeKey codes from a Discord channel fed by an SMS forwarder
+├── session.js          the panel views: your turn, fetching, code, timeout
+├── deploy.js           one panel per provider
+├── handlers/           request, get code, release, cancel, retry, done, /deploy, Eno modal
+└── index.js            boot: env, database and migrations, queues, fetchers, Discord
 ```
-
-Built on `@platform/bot-core` (config, db+migrations, Discord router, **worker queue**, logging).
 
 ## Setup
 
 ```bash
-cp .env.example .env     # Discord token + channel, IMAP inbox creds, optional webhook fallback IDs
+cp .env.example .env
 ```
 
-Key settings (see `.env.example`): `DISCORD_TOKEN`, `DISCORD_CHANNEL_ID`, `PROTON_IMAP_USER` /
-`PROTON_IMAP_PASS` (+ host/port/folder) for the inbox, and optional `WEBHOOK_CODE_CHANNEL_ID` /
-`WEBHOOK_CODE_AUTHOR_ID` to enable the webhook fallback. Start via the platform's PM2 config or
-`start.bat`, then `/deploy` in the channel where the team should request codes.
+Fill in the Discord token, client id, guild id and channel id, and the Proton Mail Bridge login.
+The template already holds the Bridge's defaults, `127.0.0.1`, port `1143` and folder `INBOX`, which work for a Bridge on the same machine.
+To add the SMS source, set both `WEBHOOK_CODE_CHANNEL_ID` and `WEBHOOK_CODE_AUTHOR_ID`. With either one missing, only the mailbox is used.
+Start the bot with the root `install.sh` or `start.bat`.
+Then run `/deploy provider:amex` or `/deploy provider:eno` in the channel where employees should request codes.
+`/deploy` is limited to members with Discord's Administrator permission, unless a server admin changes that under the server's Integrations settings.

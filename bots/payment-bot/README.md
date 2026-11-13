@@ -1,73 +1,70 @@
 # payment-bot
 
-**Know your revenue without adding it up by hand.** A Discord bot that watches money coming in
-across every rail you use, reconciles it into one ledger, and posts running daily / weekly / monthly
-totals to a team channel.
-
----
-
-## The problem it solves
-
-A business taking payments through several channels — bank transfers (Zelle), Venmo, PayPal, and
-on-chain crypto — has its revenue scattered across inboxes and block explorers. Answering "how much
-did we make today?" means manually tallying notification emails and checking wallets. payment-bot
-makes that number **always-on and self-updating**: every inbound payment is detected, parsed,
-deduplicated, and rolled into a live dashboard.
-
-**Who it's for:** an operator/admin who wants a real-time revenue picture, and a team that can see
-the day's running total in their own channel without anyone exporting a spreadsheet.
+Confirms customer payments from the payment providers' own alert emails, keeps a ledger, and shows revenue in Discord.
+A customer claiming they paid is not enough.
+The payment shows up when the Zelle, Venmo or PayPal alert reaches the business's inbox, and it is booked exactly once.
 
 ## How it works
 
-1. **Email rails (Zelle / Venmo / PayPal).** The bot holds an authenticated IMAP connection to a
-   dedicated inbox and watches for payment-confirmation emails from the providers' real sender
-   domains. Each provider has a parser that extracts `{ amount, name }`.
-2. **Crypto rail.** A transaction hash (or explorer link) is resolved against the relevant chain,
-   priced in USD, and matched to your configured receiving addresses.
-3. **Ledger.** Every detected payment is written once to a local SQLite ledger (idempotent — the same
-   email or tx can't double-count).
-4. **Dashboard.** A pinned `/dashboard` embed shows totals by method and by period and live-updates
-   as money lands.
+1. **Email rails.** For each of Zelle, Venmo and PayPal that has credentials, `monitor.js` keeps one IMAP connection to that rail's Gmail inbox, using an app password. The rails can share one Gmail account. Gmail pushes new mail over IMAP IDLE. A sweep also runs on connect and every 5 minutes, in case a push is missed.
+2. **Parsing.** Only mail whose From address exactly matches one of the rail's known senders is parsed, for example `venmo@venmo.com`. Each rail's `parse()` in `providers.js` returns the payer's name and amount, or `null` for anything that is not an inbound payment.
+3. **Ledger.** `recordPayment` inserts the payment with the IMAP UID as `external_id`. A partial unique index on `(method, external_id)` rejects a second insert of the same email, so a payment is booked and posted once.
+4. **Discord.** Each new payment is posted to `DISCORD_PAYMENT_CHANNEL_ID`, and every saved `/dashboard` message is edited to show the new totals.
+5. **Crypto.** `/crypto` takes a transaction hash or a block explorer link, looks it up on its chain, and prices it in USD at the time it was sent. It is booked only if it paid one of the `CRYPTO_ADDRESS_*` addresses, with the transaction hash as `external_id`.
 
-## Engineering & design decisions
+The root [README](../../README.md#how-a-payment-gets-confirmed) has a diagram of this flow.
 
-- **Permissive, multi-pattern parsers.** Payment-confirmation email formats vary by bank and change
-  over time (Zelle especially), so each parser tries several patterns and returns `null` for anything
-  that isn't a genuine *inbound* payment — outbound notices, refunds, and disputes are filtered out so
-  they never pollute the ledger.
-- **Null-amount handling.** Some providers now omit the amount from the notification entirely; the
-  parser still captures the sender and flags amount-unknown rather than guessing, so the ledger stays
-  honest.
-- **IMAP IDLE + safety re-poll.** The monitor uses push (IDLE) for instant detection but also sweeps
-  on an interval as a backstop in case a push is ever dropped — no missed payments, no busy-polling.
-- **Reconnect with backoff.** The mail connection self-heals on drop with capped exponential backoff.
-- **Config-driven rails.** Any rail with no credentials configured simply disables itself; the bot
-  warns at startup instead of crashing.
-- **No sensitive data in the repo.** Receiving addresses and inbox credentials live only in `.env`;
-  the ledger DB is gitignored.
+## Commands
 
-## Architecture
+| Command | Who can run it | What it does |
+|---|---|---|
+| `/dashboard` | admin role | Posts the revenue panel in the current channel and keeps it updated |
+| `/cashout` | admin role | Records money taken out. It lowers the balance. |
+| `/minus` | admin role | Records a deduction against one rail, such as a chargeback |
+| `/purge` | admin role | Deletes all bot data after a confirmation button |
+| `/crypto` | any member | Submits a crypto transaction to check and book |
+| `/refund` | any member | Posts a refund request to `REFUND_CHANNEL_ID` with **Approve** and **Deny** buttons. Approving records a deduction. |
+
+The `/dashboard` panel has two views: totals for today, this week, this month and all time, and revenue for each of the last 8 days.
+Anyone can switch views.
+Its **Restart**, **Lock** and **Unlock** buttons are admin only.
+**Restart** runs `pm2 restart all`.
+**Lock** writes the fleet lockdown file, which stops card-bot's `/card` until **Unlock**.
+
+The refund buttons do not check roles, so make the refund channel visible to admins only.
+
+## Design decisions
+
+- **Parsers that try several patterns.** Bank alert formats differ and change, Zelle's most of all, so each parser tries several phrasings. Each returns `null` for mail that does not read as an inbound payment. Venmo skips outbound notices, and PayPal skips refunds, disputes, failures and reversals, so those never reach the ledger.
+- **Alerts without an amount are skipped.** Some banks now leave the amount out of the alert, for example US Bank's Zelle notice. The parser returns the name with a `null` amount, and the bot logs it and books nothing rather than guess.
+- **Exact sender match.** A substring match would accept a spoofed address such as `venmo@venmo.com.example.org`. The bot does not verify DKIM or SPF itself, and relies on Gmail to reject forged senders.
+- **Push with a backstop.** IMAP IDLE delivers new mail without polling, and the 5-minute sweep covers a dropped push.
+- **Reconnect with backoff.** A dropped connection retries after 2, 5, 10, 30, 60, then every 120 seconds.
+- **Resume where it stopped.** `imap_cursor` stores the highest UID handled per rail, so a restart processes only newer mail. On its first start a rail skips the mail already in the inbox.
+- **Rails switch on with config.** A rail without credentials is skipped. With none configured, the bot logs a warning and runs with `/crypto` and the manual commands only.
+- **Time in New York.** Day, week and month totals start at midnight in `America/New_York`, wherever the server runs.
+
+## Code layout
 
 ```
 src/
-├── monitor.js      # IMAP IDLE connection per provider + safety re-poll + reconnect
-├── providers.js    # per-provider sender filters + email parsers (Zelle/Venmo/PayPal)
-├── blockchain.js   # multi-chain tx lookup + USD pricing (BTC/ETH/LTC/SOL/… + ERC-20 tokens)
-├── ledger.js       # idempotent SQLite ledger
-├── embeds.js       # /dashboard rendering (totals by method + period)
-├── commands.js     # /dashboard, /cashout, /refund, /crypto, /minus, /purge (admin-gated)
-└── index.js        # boot: env → db+migrations → Discord → monitors
+├── monitor.js      one IMAP IDLE connection per rail, sweep, reconnect, cursor
+├── providers.js    per-rail sender addresses and email parsers
+├── blockchain.js   transaction lookup and USD pricing for BTC, ETH, LTC, SOL, TRX, BSC, Base, Arbitrum, Polygon
+├── ledger.js       ledger writes and totals
+├── embeds.js       payment posts and the dashboard
+├── commands.js     slash commands and button and modal handlers
+├── pm2.js          the dashboard's Restart button
+├── env-schema.js   zod schema for .env
+└── index.js        boot: env, database and migrations, Discord, monitors
 ```
-
-Built on `@platform/bot-core` (config, db+migrations, Discord router, http, logging).
 
 ## Setup
 
 ```bash
-cp .env.example .env     # add Discord token + channel, IMAP creds per rail, receiving addresses
+cp .env.example .env
 ```
 
-Key settings (see `.env.example` for the full list): `DISCORD_TOKEN`, `DISCORD_PAYMENT_CHANNEL_ID`,
-`GMAIL_ADDRESS_*` / `GMAIL_APP_PASSWORD_*` per rail (any can be blank to disable it),
-`CRYPTO_ADDRESS_*` per chain, `ADMIN_ROLE_NAME`. Start it via the platform's PM2 config or `start.bat`.
-Run `/dashboard` in the target channel to deploy the live revenue panel.
+Fill in the Discord token, client id, guild id, the payment channel, the admin role name, a Gmail address and app password for each rail you use, and the crypto addresses you accept.
+Leave a rail's address or password empty to turn that rail off.
+Start the bot with the root `install.sh` or `start.bat`, then run `/dashboard` in the channel that should show revenue.
