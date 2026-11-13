@@ -120,8 +120,8 @@ export function cardCount(db, providerId) {
 /**
  * Dump every card in a provider to the same line format /load expects:
  *   number,mm,yy,cvv[,zip]
- * Returns a single string with one line per card. The string is the only
- * plaintext copy and is never written to disk.
+ * Returns a single string with one line per card. Decrypted fields and the
+ * resulting export stay in memory and are never written to disk by this helper.
  */
 export function exportCardsForProvider(db, vault, providerId) {
   const rows = db.all(

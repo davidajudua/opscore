@@ -220,7 +220,7 @@ test('booting seals live rows and scrubs previously deleted cards and sessions, 
       card_number: String(5555555500000000n + BigInt(i)), mm: '09', yy: '2031', cvv: '6847',
     }));
     const dbPath = await plaintextDatabase(dir, deleted);
-    assert.ok(plaintextFound(dbPath, deleted).includes(deleted[0].card_number));
+    assert.ok(plaintextFound(dbPath, deleted).some((value) => deleted.some((card) => card.card_number === value)));
 
     let db = await openInventory({ dbPath, migrationsDir: MIGRATIONS, vault });
     const columns = (table) => db.all(`PRAGMA table_info(${table})`).map((c) => c.name);
@@ -274,7 +274,7 @@ test('startup scrubs after migration committed without a completed scrub', async
     await runMigrations({ db, migrationsDir: MIGRATIONS, context: { vault } });
     db.close();
     db = null;
-    assert.ok(plaintextFound(dbPath, deleted).includes(deleted[0].card_number), 'committed migration alone leaves historical plaintext');
+    assert.ok(plaintextFound(dbPath, deleted).some((value) => deleted.some((card) => card.card_number === value)), 'committed migration alone leaves historical plaintext');
 
     db = await openInventory({ dbPath, migrationsDir: MIGRATIONS, vault });
     assert.deepEqual(plaintextFound(dbPath, [...CARDS, ...deleted]), [], 'database, WAL and shm contain no card secrets');

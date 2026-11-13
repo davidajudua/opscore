@@ -1,5 +1,5 @@
 /**
- * The only module that sees a card's number, expiry, CVV and zip together.
+ * The only module that seals or opens a card's number, expiry, CVV and zip.
  *
  * A card exists in two forms:
  *   PlainCard   lives only in memory: while a /load file is parsed, while a claimed
@@ -34,7 +34,7 @@ import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } f
  * @property {Uint8Array} ciphertext
  * @property {string} fingerprint     HMAC-SHA256 of the card number. Lets SQLite enforce
  *                                    uniqueness without the number itself.
- * @property {string} last4           The only part of the number that is ever displayed.
+ * @property {string} last4           Display value for browsers and resolved claims without opening the card.
  */
 
 export const SEALED_COLUMNS = ['key_id', 'nonce', 'tag', 'ciphertext', 'fingerprint', 'last4'];
