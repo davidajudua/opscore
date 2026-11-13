@@ -4,7 +4,8 @@
  * Each provider has:
  *   id           short identifier ('zelle' | 'venmo' | 'paypal')
  *   label        display name
- *   senders      list of substrings; emails whose From contains any of these are eligible
+ *   senders      exact sender addresses; monitor.js only parses mail whose From address
+ *                equals one of these
  *   parse(msg)   parse a ParsedMessage, return { amount, name } or null if not a real payment
  *
  * The parse functions are intentionally permissive — payment-confirmation email formats
