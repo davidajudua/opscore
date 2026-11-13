@@ -485,15 +485,14 @@ function paginationRow(bot, kind, filter, safePage, totalPages) {
 }
 
 // Filter actions are distinct from pagination actions:
-//   filter:    prov:cfilter:<id>   /  prov:efilter:<id>
-//   paginate:  prov:cards:<filter>:<page>  /  prov:emails:<filter>:<page>
+//   filter:    prov:cfilter:<id>
+//   paginate:  prov:cards:<filter>:<page>
 // This avoids customId collisions (filter button for "A" and pagination Prev
 // from page 1 of "A" would otherwise both encode to prov:cards:A:0).
-function filterRow(bot, kind, filter, options) {
-  const filterAction = kind === 'cards' ? 'cfilter' : 'efilter';
+function filterRow(bot, filter, options) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(bot.customId('prov', filterAction, 'all'))
+      .setCustomId(bot.customId('prov', 'cfilter', 'all'))
       .setLabel('All')
       .setStyle(filter === 'all' ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
@@ -501,7 +500,7 @@ function filterRow(bot, kind, filter, options) {
   for (const opt of options.slice(0, 4)) {
     row.addComponents(
       new ButtonBuilder()
-        .setCustomId(bot.customId('prov', filterAction, opt.id))
+        .setCustomId(bot.customId('prov', 'cfilter', opt.id))
         .setLabel(opt.label)
         .setStyle(filter === opt.id ? ButtonStyle.Success : ButtonStyle.Secondary),
     );
@@ -537,7 +536,6 @@ function cardsBrowserPanel(bot, db, filter = 'all', page = 0) {
     .addActionRowComponents(
       filterRow(
         bot,
-        'cards',
         validFilter,
         providers.map((p) => ({ id: p.id, label: p.id })),
       ),
@@ -925,11 +923,11 @@ export function providersDeleteModalHandler({ db, env, bot, logger }) {
   };
 }
 
-/* ============================================================== /loadcards + /loademails */
+/* ============================================================== /load */
 
 /**
- * /load cards|emails — unified loader. Subcommand picks the type; the handler
- * dispatches to the right parser + table.
+ * /load type:cards: parses the uploaded file, then seals and appends (or replaces)
+ * the cards in the chosen provider.
  */
 export function loadHandler({ db, env, vault, logger }) {
   const gate = requireAdmin(env);

@@ -95,14 +95,44 @@ test('the claimer sees the full card, and the message drops to the last four onc
   }
 });
 
-test('the cards browser lists last four digits only', async () => {
+/** Every button in a payload, as Discord receives it. */
+function buttons(payload) {
+  const found = [];
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (node && typeof node === 'object') {
+      if (node.type === 2 && node.custom_id) found.push(node);
+      Object.values(node).forEach(walk);
+    }
+  };
+  walk((payload.components ?? []).map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c)));
+  return found;
+}
+
+test('the cards browser lists last four digits only, and its provider filter works', async () => {
   const { ctx, cleanup } = await setup();
   try {
+    addProvider(ctx.db, { id: 'cap1', name: 'Capital One' });
+    loadCards(ctx.db, ctx.vault, 'cap1', [{ card_number: '4111111111111111', mm: '11', yy: '2033', cvv: '123' }]);
+
     const browse = interaction({ admin: true });
     await providersButtonHandler(ctx)(browse, ['opencards']);
     const shown = visible(browse.sent[0]);
-    assert.ok(shown.includes('[amex] •••• 0005') && shown.includes('[amex] •••• 8431'));
-    for (const secret of SECRETS) assert.ok(!shown.includes(secret), `browser hides ${secret}`);
+    for (const row of ['[amex] •••• 0005', '[amex] •••• 8431', '[cap1] •••• 1111']) {
+      assert.ok(shown.includes(row), `browser lists ${row}`);
+    }
+    for (const secret of [...SECRETS, '4111111111111111']) {
+      assert.ok(!shown.includes(secret), `browser hides ${secret}`);
+    }
+
+    // Press the "cap1" filter button. The router hands the handler the custom id
+    // minus the action it is registered under, which here is the first segment.
+    const cap1Button = buttons(browse.sent[0]).find((b) => b.label === 'cap1');
+    const press = interaction({ admin: true });
+    await providersButtonHandler(ctx)(press, cap1Button.custom_id.split(':').slice(1));
+    const filtered = visible(press.sent[0]);
+    assert.ok(filtered.includes('[cap1] •••• 1111'), 'filtered view lists the cap1 card');
+    assert.ok(!filtered.includes('[amex]'), 'filtered view leaves out other providers');
   } finally {
     cleanup();
   }
