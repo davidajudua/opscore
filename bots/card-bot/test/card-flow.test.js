@@ -243,3 +243,74 @@ test('a failed Return transaction keeps the session and lets Used close it', asy
     cleanup();
   }
 });
+
+for (const action of ['used', 'error', 'return']) {
+  test(`${action} during claim publication preserves the message until registration`, async () => {
+    const { ctx, cleanup } = await setup();
+    try {
+      const claim = interaction();
+      let finishFetch;
+      let fetchStarted;
+      const fetching = new Promise((resolve) => { fetchStarted = resolve; });
+      claim.fetchReply = () => {
+        fetchStarted();
+        return new Promise((resolve) => { finishFetch = resolve; });
+      };
+      const pending = cardHandler(ctx)(claim);
+      await fetching;
+      const press = interaction({ messageId: 'claim-msg' });
+      let edits = 0;
+      press.update = async () => { edits++; };
+      await cardActionHandler(ctx)(press, [action]);
+      assert.equal(edits, 0, 'initializing claim must retain its card and buttons');
+      assert.match(visible(press.sent[0]), /still being set up/);
+      assert.ok(press.sent[0].flags & 64);
+      assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
+      finishFetch({ id: 'claim-msg' });
+      await pending;
+      assert.ok(getCardSession(ctx.db, 'claim-msg'));
+      const retry = interaction({ messageId: 'claim-msg' });
+      await cardActionHandler(ctx)(retry, [action]);
+      assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
+      assert.equal(cardCount(ctx.db, 'amex'), action === 'return' ? 2 : 1);
+      assert.match(visible(retry.sent[0]), action === 'return' ? /Returned/ : action === 'used' ? /Used/ : /Errored/);
+      for (const secret of SECRETS) assert.ok(!visible(retry.sent[0]).includes(secret));
+    } finally {
+      cleanup();
+    }
+  });
+}
+
+test('concurrent publications for one worker stay pending until both finish', async () => {
+  const { ctx, cleanup } = await setup();
+  try {
+    const releases = [];
+    let bothStarted;
+    const started = new Promise((resolve) => { bothStarted = resolve; });
+    const claims = [interaction(), interaction()];
+    for (const claim of claims) {
+      claim.fetchReply = () => new Promise((resolve) => {
+        releases.push(resolve);
+        if (releases.length === 2) bothStarted();
+      });
+    }
+    const pending = claims.map((claim) => cardHandler(ctx)(claim));
+    await started;
+    releases[0]({ id: 'first' });
+    await pending[0];
+    const press = interaction({ messageId: 'second' });
+    await cardActionHandler(ctx)(press, ['return']);
+    assert.match(visible(press.sent[0]), /still being set up/);
+    releases[1]({ id: 'second' });
+    await pending[1];
+    const handler = cardActionHandler(ctx);
+    await handler(interaction({ messageId: 'first' }), ['return']);
+    await handler(interaction({ messageId: 'second' }), ['return']);
+    assert.equal(cardCount(ctx.db, 'amex'), 2);
+    const closed = interaction({ messageId: 'second' });
+    await handler(closed, ['return']);
+    assert.match(visible(closed.sent[0]), /claim is closed/);
+  } finally {
+    cleanup();
+  }
+});

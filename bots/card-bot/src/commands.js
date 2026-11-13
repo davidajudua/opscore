@@ -189,6 +189,8 @@ function requireAdmin(env) {
 
 /* ============================================================== /card */
 
+const publishingClaims = new Map();
+
 export function cardHandler({ db, vault, bot, logger, repoRoot }) {
   const openGate = requireOpen(repoRoot);
   const gate = requireFeature(db, 'card');
@@ -200,33 +202,41 @@ export function cardHandler({ db, vault, bot, logger, repoRoot }) {
       await postError(interaction, 'No cards available, all providers are empty.');
       return;
     }
-    // Discord network calls can fail (5xx, rate limit, timeout). If reply or
-    // fetchReply throws, the card is already DELETE'd from inventory but no
-    // session row exists — silent loss. Wrap and recover by re-queueing the card.
+    const userId = interaction.user.id;
+    publishingClaims.set(userId, (publishingClaims.get(userId) ?? 0) + 1);
     let replyMsg;
     try {
-      await interaction.reply(
-        cardEmbed({ card: result.card, provider: result.provider, bot }),
-      );
-      replyMsg = await interaction.fetchReply();
-    } catch (err) {
-      returnCardToPool(db, { ...result.sealed, message_id: null });
-      logger?.error(
-        {
-          err: err.message,
-          provider: result.provider.id,
-          cardLast4: result.sealed.last4,
-        },
-        'card claim discord failure — card returned to pool',
-      );
-      return;
+      // Discord network calls can fail (5xx, rate limit, timeout). If reply or
+      // fetchReply throws, the card is already DELETE'd from inventory but no
+      // session row exists — silent loss. Wrap and recover by re-queueing the card.
+      try {
+        await interaction.reply(
+          cardEmbed({ card: result.card, provider: result.provider, bot }),
+        );
+        replyMsg = await interaction.fetchReply();
+      } catch (err) {
+        returnCardToPool(db, { ...result.sealed, message_id: null });
+        logger?.error(
+          {
+            err: err.message,
+            provider: result.provider.id,
+            cardLast4: result.sealed.last4,
+          },
+          'card claim discord failure — card returned to pool',
+        );
+        return;
+      }
+      openCardSession(db, {
+        messageId: replyMsg.id,
+        userId: interaction.user.id,
+        providerId: result.provider.id,
+        sealed: result.sealed,
+      });
+    } finally {
+      const remaining = publishingClaims.get(userId) - 1;
+      if (remaining) publishingClaims.set(userId, remaining);
+      else publishingClaims.delete(userId);
     }
-    openCardSession(db, {
-      messageId: replyMsg.id,
-      userId: interaction.user.id,
-      providerId: result.provider.id,
-      sealed: result.sealed,
-    });
     await maybeAlertLowStock(interaction, {
       db,
       kind: 'card',
@@ -250,6 +260,11 @@ export function cardActionHandler({ db, logger }) {
     const [action] = args;
     const session = getCardSession(db, interaction.message.id);
     if (!session) {
+      if (publishingClaims.has(interaction.user.id)) {
+        const payload = errorPayload('This card is still being set up. Press the button again in a moment.');
+        await interaction.reply({ ...payload, flags: payload.flags | MessageFlags.Ephemeral });
+        return;
+      }
       await interaction.update(closedClaimPayload());
       return;
     }
@@ -269,7 +284,8 @@ export function cardActionHandler({ db, logger }) {
     if (action === 'return') {
       try {
         status = returnCardToPool(db, session);
-      } catch {
+      } catch (err) {
+        logger?.error({ err: err.message, provider: session.provider_id, cardLast4 }, 'card return failed');
         const payload = errorPayload('Could not return this card. Try again or mark it Used or Error.');
         await interaction.reply({ ...payload, flags: payload.flags | MessageFlags.Ephemeral });
         return;
