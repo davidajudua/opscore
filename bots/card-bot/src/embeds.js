@@ -262,3 +262,9 @@ export function workersStatsPageContainer({ bot, tab, sorted, pageIdx, prices })
 
   return c;
 }
+
+export function closedClaimPayload() {
+  return v2Payload(new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent('This claim is closed.'),
+  ));
+}

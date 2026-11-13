@@ -484,19 +484,21 @@ export function removeStockPointer(db, messageId) {
  * Put a card session's sealed card back into the active card pool. Used by the Return
  * button. Inserts at the head of the provider's stock so the next /card claim picks it
  * up first. `session` needs provider_id, message_id and the sealed columns.
- * Returns true when restocked, or false when the session was already gone.
+ * Returns 'restocked', 'already-in-stock', or 'no-session'.
  */
 export function returnCardToPool(db, session) {
   // To put it FIRST, take the current minimum id and use min - 1 (allowed in SQLite).
   const txn = db.transaction(() => {
     if (session.message_id !== null) {
       const deleted = db.run(`DELETE FROM card_sessions WHERE message_id = ?`, session.message_id);
-      if (deleted.changes !== 1) return false;
+      if (deleted.changes !== 1) return 'no-session';
+    }
+    if (db.get(`SELECT 1 FROM cards WHERE provider_id = ? AND fingerprint = ?`, session.provider_id, session.fingerprint)) {
+      return 'already-in-stock';
     }
     clearAlertsForPrefix(db, `card:${session.provider_id}`);
     const minRow = db.get(
-      `SELECT MIN(id) AS min_id FROM cards WHERE provider_id = ?`,
-      session.provider_id,
+      `SELECT MIN(id) AS min_id FROM cards`,
     );
     const newId = minRow?.min_id != null ? minRow.min_id - 1 : 1;
     db.run(
@@ -507,7 +509,7 @@ export function returnCardToPool(db, session) {
       ...sealedValues(session),
       Date.now(),
     );
-    return true;
+    return 'restocked';
   });
   return txn();
 }

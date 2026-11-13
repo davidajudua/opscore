@@ -15,6 +15,7 @@ That card leaves the pool, so nobody else can be handed it.
    - **Return** puts the card back at the front of its provider's pool.
 
    After any of the three, the message is edited to show the last four digits only.
+   Pressing a button on an already closed claim replaces the message with a closed notice.
 5. When a claim leaves a provider with 10 cards or fewer, card-bot posts a low-stock alert, once per count.
 
 ## Commands

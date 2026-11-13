@@ -70,3 +70,38 @@ test('clearAlertsForPrefix treats _ and % literally (no LIKE-wildcard over-delet
     assert.equal(isAlertFired(db, 'card:a_b:lowstock'), false, 'target prefix cleared');
     assert.equal(isAlertFired(db, 'card:axb:lowstock'), true, 'unrelated provider must NOT be cleared by a literal _');
   }));
+
+test('Return allocates a global head id without touching another provider', () =>
+  withDb((db, vault) => {
+    addProvider(db, { id: 'a', name: 'A' });
+    addProvider(db, { id: 'b', name: 'B' });
+    const card = { card_number: '378282246310005', mm: '09', yy: '2031', cvv: '7351' };
+    loadCards(db, vault, 'a', [card]);
+    loadCards(db, vault, 'b', [{ ...card, card_number: '371449635398431' }]);
+    const original = db.get(`SELECT * FROM cards WHERE provider_id = 'a'`);
+    db.run(`UPDATE providers SET is_active = CASE WHEN id = 'b' THEN 1 ELSE 0 END`);
+    db.run(`INSERT OR REPLACE INTO settings (key, value) VALUES ('card_mode', 'single')`);
+    const claimed = claimCard(db, vault);
+    assert.equal(claimed.provider.id, 'b');
+    openCardSession(db, { messageId: 'm1', userId: 'u1', providerId: 'b', sealed: claimed.sealed });
+    assert.equal(returnCardToPool(db, getCardSession(db, 'm1')), 'restocked');
+    assert.deepEqual(db.get(`SELECT * FROM cards WHERE provider_id = 'a'`), original);
+    assert.equal(cardCount(db, 'b'), 1);
+    assert.deepEqual(claimCard(db, vault).card, claimed.card);
+  }));
+
+test('Return reconciles a reloaded card and duplicate returns do nothing', () =>
+  withDb((db, vault) => {
+    addProvider(db, { id: 'amex', name: 'Amex' });
+    const card = { card_number: '378282246310005', mm: '09', yy: '2031', cvv: '7351' };
+    loadCards(db, vault, 'amex', [card]);
+    const claimed = claimCard(db, vault);
+    openCardSession(db, { messageId: 'm1', userId: 'u1', providerId: 'amex', sealed: claimed.sealed });
+    const session = getCardSession(db, 'm1');
+    loadCards(db, vault, 'amex', [card]);
+    assert.equal(returnCardToPool(db, session), 'already-in-stock');
+    assert.equal(getCardSession(db, 'm1'), undefined);
+    assert.equal(cardCount(db, 'amex'), 1);
+    assert.equal(returnCardToPool(db, session), 'no-session');
+    assert.equal(cardCount(db, 'amex'), 1);
+  }));

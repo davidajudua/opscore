@@ -164,23 +164,23 @@ test('/export gives the admin role an ephemeral file of full cards, and nobody e
   }
 });
 
+
 for (const action of ['used', 'error', 'return']) {
-  test(`${action} remains retryable after Discord fails to mask the claim`, async () => {
+  test(`${action} closes state before Discord update and a retry masks the closed claim`, async () => {
     const { ctx, cleanup } = await setup();
     try {
       await cardHandler(ctx)(interaction());
+      const handler = cardActionHandler(ctx);
       const press = interaction({ messageId: 'claim-msg' });
       press.update = async () => { throw new Error('Discord unavailable'); };
-      const handler = cardActionHandler(ctx);
       await assert.rejects(handler(press, [action]), /Discord unavailable/);
-      assert.ok(getCardSession(ctx.db, 'claim-msg'));
-      assert.equal(cardCount(ctx.db, 'amex'), 1);
-      const retry = interaction({ messageId: 'claim-msg' });
-      await handler(retry, [action]);
-      assert.ok(visible(retry.sent[0]).includes('•••• 0005'));
-      for (const secret of SECRETS) assert.ok(!visible(retry.sent[0]).includes(secret));
       assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
       assert.equal(cardCount(ctx.db, 'amex'), action === 'return' ? 2 : 1);
+      const retry = interaction({ messageId: 'claim-msg' });
+      await handler(retry, [action]);
+      assert.match(visible(retry.sent[0]), /claim is closed/);
+      for (const value of [...SECRETS, '09/2031', '90210', '0005']) assert.ok(!visible(retry.sent[0]).includes(value));
+      assert.deepEqual(buttons(retry.sent[0]), []);
     } finally {
       cleanup();
     }
@@ -188,31 +188,58 @@ for (const action of ['used', 'error', 'return']) {
 }
 
 for (const [first, second] of [['return', 'return'], ['used', 'return'], ['error', 'return'], ['return', 'used'], ['return', 'error']]) {
-  test(`concurrent ${first} and ${second} presses resolve only once`, async () => {
+  test(`concurrent ${first} and ${second} resolve once and mask both messages`, async () => {
     const { ctx, logLines, cleanup } = await setup();
     try {
       await cardHandler(ctx)(interaction());
       const handler = cardActionHandler(ctx);
       const winner = interaction({ messageId: 'claim-msg' });
-      const blocked = interaction({ messageId: 'claim-msg' });
-      let release;
-      winner.update = (payload) => {
-        winner.sent.push(payload);
-        return new Promise((resolve) => { release = resolve; });
-      };
-      const pending = [handler(winner, [first]), handler(blocked, [second])];
-      assert.ok(getCardSession(ctx.db, 'claim-msg'));
-      assert.equal(cardCount(ctx.db, 'amex'), 1);
-      assert.match(visible(blocked.sent[0]), /already being updated/);
-      assert.ok(blocked.sent[0].flags & 64, 'competing press gets an ephemeral reply');
-      release();
-      await Promise.all(pending);
-      assert.equal(cardCount(ctx.db, 'amex'), first === 'return' ? 2 : 1);
+      const closed = interaction({ messageId: 'claim-msg' });
+      const releases = [];
+      for (const press of [winner, closed]) {
+        press.update = (payload) => {
+          press.sent.push(payload);
+          return new Promise((resolve) => releases.push(resolve));
+        };
+      }
+      const pending = [handler(winner, [first]), handler(closed, [second])];
+      assert.equal(releases.length, 2);
       assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
-      assert.match(visible(winner.sent[0]), first === 'return' ? /Returned/ : first === 'used' ? /Used/ : /Error/);
+      assert.equal(cardCount(ctx.db, 'amex'), first === 'return' ? 2 : 1);
+      releases.forEach((resolve) => resolve());
+      await Promise.all(pending);
+      assert.match(visible(winner.sent[0]), first === 'return' ? /Returned/ : first === 'used' ? /Used/ : /Errored/);
+      assert.match(visible(closed.sent[0]), /claim is closed/);
+      assert.deepEqual(buttons(closed.sent[0]), []);
+      for (const secret of SECRETS) {
+        assert.ok(!visible(closed.sent[0]).includes(secret));
+        assert.ok(!visible(winner.sent[0]).includes(secret));
+        assert.ok(!logLines.some((line) => line.includes(secret)));
+      }
       assert.equal(logLines.filter((line) => line.includes('card returned to pool')).length, first === 'return' ? 1 : 0);
     } finally {
       cleanup();
     }
   });
 }
+
+test('a failed Return transaction keeps the session and lets Used close it', async () => {
+  const { ctx, cleanup } = await setup();
+  try {
+    await cardHandler(ctx)(interaction());
+    ctx.db.runScript(`CREATE TRIGGER reject_return BEFORE INSERT ON cards BEGIN SELECT RAISE(ABORT, 'blocked'); END`);
+    const handler = cardActionHandler(ctx);
+    const press = interaction({ messageId: 'claim-msg' });
+    await handler(press, ['return']);
+    assert.ok(press.sent[0].flags & 64);
+    assert.match(visible(press.sent[0]), /Could not return/);
+    assert.ok(getCardSession(ctx.db, 'claim-msg'));
+    assert.equal(cardCount(ctx.db, 'amex'), 1);
+    const used = interaction({ messageId: 'claim-msg' });
+    await handler(used, ['used']);
+    assert.match(visible(used.sent[0]), /Used/);
+    assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
+  } finally {
+    cleanup();
+  }
+});
