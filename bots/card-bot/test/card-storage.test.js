@@ -55,7 +55,7 @@ async function freshInventory(vault = createCardVault(randomBytes(32))) {
 }
 
 /** A database in the shape the bot had before cards were sealed, holding plaintext rows. */
-async function plaintextDatabase(dir) {
+async function plaintextDatabase(dir, deletedCards = []) {
   const oldMigrations = path.join(dir, 'old-migrations');
   mkdirSync(oldMigrations);
   for (const f of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'))) {
@@ -77,6 +77,20 @@ async function plaintextDatabase(dir) {
      VALUES ('m1', 'u1', 'amex', ?, ?, ?, ?, ?, 1)`,
     s.card_number, s.mm, s.yy, s.cvv, s.zip,
   );
+  db.runScript('PRAGMA secure_delete = OFF');
+  for (const c of deletedCards) {
+    db.run(
+      `INSERT INTO cards (provider_id, card_number, mm, yy, cvv, added_at) VALUES ('amex', ?, ?, ?, ?, 1)`,
+      c.card_number, c.mm, c.yy, c.cvv,
+    );
+    db.run(
+      `INSERT INTO card_sessions (message_id, user_id, provider_id, card_number, mm, yy, cvv, claimed_at)
+       VALUES (?, 'u1', 'amex', ?, ?, ?, ?, 1)`,
+      c.card_number, c.card_number, c.mm, c.yy, c.cvv,
+    );
+  }
+  db.run(`DELETE FROM cards WHERE id > 2`);
+  db.run(`DELETE FROM card_sessions WHERE message_id != 'm1'`);
   db.close();
   return dbPath;
 }
@@ -198,11 +212,15 @@ test('/export output parses back into the cards that were loaded', async () => {
   }
 });
 
-test('booting on a plaintext database seals every row in place, once', async () => {
+test('booting seals live rows and scrubs previously deleted cards and sessions, once', async () => {
   const dir = tempDir();
   const vault = createCardVault(randomBytes(32));
   try {
-    const dbPath = await plaintextDatabase(dir);
+    const deleted = Array.from({ length: 400 }, (_, i) => ({
+      card_number: String(5555555500000000n + BigInt(i)), mm: '09', yy: '2031', cvv: '6847',
+    }));
+    const dbPath = await plaintextDatabase(dir, deleted);
+    assert.ok(plaintextFound(dbPath, deleted).includes(deleted[0].card_number));
 
     let db = await openInventory({ dbPath, migrationsDir: MIGRATIONS, vault });
     const columns = (table) => db.all(`PRAGMA table_info(${table})`).map((c) => c.name);
@@ -215,8 +233,9 @@ test('booting on a plaintext database seals every row in place, once', async () 
     const session = db.get(`SELECT * FROM card_sessions WHERE message_id = 'm1'`);
     assert.deepEqual(cardsAfterFirstBoot.map((row) => vault.open(row)), CARDS.slice(0, 2).map((c) => ({ zip: null, ...c })));
     assert.deepEqual(vault.open(session), CARDS[2]);
+    assert.deepEqual(plaintextFound(dbPath, [...CARDS, ...deleted]), [], 'no plaintext in database or live WAL');
     db.close();
-    assert.deepEqual(plaintextFound(dbPath, CARDS), [], 'no plaintext left in the file');
+    assert.deepEqual(plaintextFound(dbPath, [...CARDS, ...deleted]), [], 'no plaintext left in the file');
 
     db = await openInventory({ dbPath, migrationsDir: MIGRATIONS, vault });
     assert.deepEqual(db.all('SELECT * FROM cards ORDER BY id'), cardsAfterFirstBoot, 'second boot changes nothing');

@@ -265,22 +265,22 @@ export function cardActionHandler({ db, logger }) {
 
     const cardLast4 = session.last4;
     if (action === 'used') {
-      closeCardSession(db, interaction.message.id);
       await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'used' }));
+      closeCardSession(db, interaction.message.id);
       logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card marked used');
       return;
     }
     if (action === 'error') {
-      closeCardSession(db, interaction.message.id);
       await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'error' }));
+      closeCardSession(db, interaction.message.id);
       logger?.warn({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card flagged as error');
       return;
     }
     if (action === 'return') {
-      returnCardToPool(db, session);
-      closeCardSession(db, interaction.message.id); // match 'used'/'error': don't leave an orphan session row
       await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'returned' }));
-      logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card returned to pool');
+      if (returnCardToPool(db, session)) {
+        logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card returned to pool');
+      }
       return;
     }
   };

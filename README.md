@@ -139,7 +139,8 @@ It derives three values from `CARD_ENCRYPTION_KEY` with HKDF: the AES-256-GCM ke
 A card is opened in memory in two places only: when it is handed to the employee who claimed it, and when an admin runs `/export`.
 
 card-bot refuses to start if `CARD_ENCRYPTION_KEY` is missing or malformed, or if the database holds cards sealed with a different key.
-Migration `016_seal_cards.js` converts a database from before encryption in place, under SQLite's `secure_delete`, and the bot then truncates the WAL, so the old plaintext does not stay in the file.
+Migration `016_seal_cards.js` converts a database from before encryption in place under SQLite's `secure_delete`.
+The upgrade then runs `VACUUM` to discard historical plaintext in free pages and truncates the WAL.
 
 Key rotation is not implemented yet.
 The stored key id is there so it can be added.

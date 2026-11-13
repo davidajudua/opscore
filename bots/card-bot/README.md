@@ -65,7 +65,8 @@ The root [Security section](../../README.md#security) covers backing up the key.
 
 Migration `016_seal_cards.js` upgrades a database from before encryption.
 It rebuilds `cards` and `card_sessions` with sealed columns, drops the plaintext tables, and skips a table that is already sealed.
-`openInventory` turns on `secure_delete` before migrating and truncates the WAL afterwards, so no plaintext stays in the file.
+`openInventory` turns on `secure_delete` before migrating.
+The sealing upgrade then runs `VACUUM` to discard historical plaintext in free pages and truncates the WAL.
 
 ## Design decisions
 

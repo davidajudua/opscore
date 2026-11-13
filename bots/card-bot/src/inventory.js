@@ -26,7 +26,8 @@ const sealedValues = (sealed) => SEALED_COLUMNS.map((col) => sealed[col]);
 export async function openInventory({ dbPath, migrationsDir, vault, logger }) {
   const db = openDb({ dbPath, logger });
   db.runScript('PRAGMA secure_delete = ON');
-  await runMigrations({ db, migrationsDir, logger, context: { vault } });
+  const { applied } = await runMigrations({ db, migrationsDir, logger, context: { vault } });
+  if (applied.includes('016_seal_cards.js')) db.runScript('VACUUM');
   db.runScript('PRAGMA wal_checkpoint(TRUNCATE)');
 
   const foreign = db.get(
@@ -477,10 +478,13 @@ export function removeStockPointer(db, messageId) {
  * up first. `session` needs provider_id, message_id and the sealed columns.
  */
 export function returnCardToPool(db, session) {
-  // Returning a card to the pool re-arms low-stock alerts for that provider.
-  clearAlertsForPrefix(db, `card:${session.provider_id}`);
   // To put it FIRST, take the current minimum id and use min - 1 (allowed in SQLite).
   const txn = db.transaction(() => {
+    if (session.message_id !== null) {
+      const deleted = db.run(`DELETE FROM card_sessions WHERE message_id = ?`, session.message_id);
+      if (deleted.changes !== 1) return false;
+    }
+    clearAlertsForPrefix(db, `card:${session.provider_id}`);
     const minRow = db.get(
       `SELECT MIN(id) AS min_id FROM cards WHERE provider_id = ?`,
       session.provider_id,
@@ -494,9 +498,9 @@ export function returnCardToPool(db, session) {
       ...sealedValues(session),
       Date.now(),
     );
-    db.run(`DELETE FROM card_sessions WHERE message_id = ?`, session.message_id);
+    return true;
   });
-  txn();
+  return txn();
 }
 
 /**

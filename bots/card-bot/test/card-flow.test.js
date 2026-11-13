@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCardVault } from '../src/card-vault.js';
-import { addProvider, loadCards, openInventory, setWhitelist } from '../src/inventory.js';
+import { addProvider, cardCount, getCardSession, loadCards, openInventory, setWhitelist } from '../src/inventory.js';
 import {
   cardActionHandler,
   cardHandler,
@@ -159,6 +159,47 @@ test('/export gives the admin role an ephemeral file of full cards, and nobody e
     for (const secret of SECRETS) {
       assert.ok(!logLines.some((l) => l.includes(secret)), `no log line contains ${secret}`);
     }
+  } finally {
+    cleanup();
+  }
+});
+
+for (const action of ['used', 'error', 'return']) {
+  test(`${action} remains retryable after Discord fails to mask the claim`, async () => {
+    const { ctx, cleanup } = await setup();
+    try {
+      await cardHandler(ctx)(interaction());
+      const press = interaction({ messageId: 'claim-msg' });
+      press.update = async () => { throw new Error('Discord unavailable'); };
+      await assert.rejects(cardActionHandler(ctx)(press, [action]), /Discord unavailable/);
+      assert.ok(getCardSession(ctx.db, 'claim-msg'));
+      assert.equal(cardCount(ctx.db, 'amex'), 1);
+      const retry = interaction({ messageId: 'claim-msg' });
+      await cardActionHandler(ctx)(retry, [action]);
+      assert.ok(visible(retry.sent[0]).includes('•••• 0005'));
+      for (const secret of SECRETS) assert.ok(!visible(retry.sent[0]).includes(secret));
+      assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
+      assert.equal(cardCount(ctx.db, 'amex'), action === 'return' ? 2 : 1);
+    } finally {
+      cleanup();
+    }
+  });
+}
+
+test('concurrent Return presses restock exactly once', async () => {
+  const { ctx, logLines, cleanup } = await setup();
+  try {
+    await cardHandler(ctx)(interaction());
+    const presses = [interaction({ messageId: 'claim-msg' }), interaction({ messageId: 'claim-msg' })];
+    const releases = [];
+    for (const press of presses) press.update = () => new Promise((resolve) => releases.push(resolve));
+    const pending = presses.map((press) => cardActionHandler(ctx)(press, ['return']));
+    assert.equal(releases.length, 2);
+    releases.forEach((resolve) => resolve());
+    await Promise.all(pending);
+    assert.equal(cardCount(ctx.db, 'amex'), 2);
+    assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
+    assert.equal(logLines.filter((line) => line.includes('card returned to pool')).length, 1);
   } finally {
     cleanup();
   }
