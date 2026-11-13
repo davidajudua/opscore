@@ -2,13 +2,14 @@
 
 Confirms customer payments from the payment providers' own alert emails, keeps a ledger, and shows revenue in Discord.
 A customer claiming they paid is not enough.
-The payment shows up when the Zelle, Venmo or PayPal alert reaches the business's inbox, and it is booked exactly once.
+The payment shows up when the Zelle, Venmo or PayPal alert reaches the business's inbox.
+Each alert email is booked once, keyed by its IMAP UID.
 
 ## How it works
 
 1. **Email rails.** For each of Zelle, Venmo and PayPal that has credentials, `monitor.js` keeps one IMAP connection to that rail's Gmail inbox, using an app password. The rails can share one Gmail account. Gmail pushes new mail over IMAP IDLE. A sweep also runs on connect and every 5 minutes, in case a push is missed.
 2. **Parsing.** Only mail whose From address exactly matches one of the rail's known senders is parsed, for example `venmo@venmo.com`. Each rail's `parse()` in `providers.js` returns the payer's name and amount, or `null` for anything that is not an inbound payment.
-3. **Ledger.** `recordPayment` inserts the payment with the IMAP UID as `external_id`. A partial unique index on `(method, external_id)` rejects a second insert of the same email, so a payment is booked and posted once.
+3. **Ledger.** `recordPayment` inserts the payment with the IMAP UID as `external_id`. A partial unique index on `(method, external_id)` rejects a second insert of the same email, so each alert email is booked and posted once, keyed by its IMAP UID.
 4. **Discord.** Each new payment is posted to `DISCORD_PAYMENT_CHANNEL_ID`, and every saved `/dashboard` message is edited to show the new totals.
 5. **Crypto.** `/crypto` takes a transaction hash or a block explorer link, looks it up on its chain, and prices it in USD at the time it was sent. It is booked only if it paid one of the `CRYPTO_ADDRESS_*` addresses, with the transaction hash as `external_id`.
 

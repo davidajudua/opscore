@@ -35,7 +35,8 @@ flowchart TD
 ```
 
 The partial unique index `ledger_method_external_idx` on `ledger(method, external_id) WHERE external_id IS NOT NULL` is what makes the ledger idempotent.
-`recordPayment` catches the constraint error and returns `{ inserted: false }`, so a re-sent alert, an overlapping sweep, or a restart books nothing twice and posts nothing twice.
+`recordPayment` catches the constraint error and returns `{ inserted: false }`, so an overlapping sweep, a repeated IDLE push, or a restart that sees the same email again books nothing twice and posts nothing twice.
+A second copy of an alert delivered as a new email has a new IMAP UID and is booked again.
 Crypto payments from `/crypto` use the same index, with the transaction hash as `external_id`.
 
 ## How the pieces fit

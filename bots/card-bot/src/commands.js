@@ -245,43 +245,55 @@ export function cardHandler({ db, vault, bot, logger, repoRoot }) {
 }
 
 export function cardActionHandler({ db, logger }) {
+  const updating = new Set();
   return async function (interaction, args) {
-    const [action] = args;
-    const session = getCardSession(db, interaction.message.id);
-    if (!session) {
-      await postError(interaction, 'This card session has expired.');
+    const messageId = interaction.message.id;
+    if (updating.has(messageId)) {
+      const payload = errorPayload('This card is already being updated.');
+      await interaction.reply({ ...payload, flags: payload.flags | MessageFlags.Ephemeral });
       return;
     }
-    if (session.user_id !== interaction.user.id) {
-      await postError(interaction, 'Only the worker who claimed this card can use these buttons.');
-      return;
-    }
-
-    const provider = listProviders(db).find((p) => p.id === session.provider_id) ?? {
-      id: session.provider_id,
-      name: session.provider_id,
-      zip: null,
-    };
-
-    const cardLast4 = session.last4;
-    if (action === 'used') {
-      await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'used' }));
-      closeCardSession(db, interaction.message.id);
-      logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card marked used');
-      return;
-    }
-    if (action === 'error') {
-      await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'error' }));
-      closeCardSession(db, interaction.message.id);
-      logger?.warn({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card flagged as error');
-      return;
-    }
-    if (action === 'return') {
-      await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'returned' }));
-      if (returnCardToPool(db, session)) {
-        logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card returned to pool');
+    updating.add(messageId);
+    try {
+      const [action] = args;
+      const session = getCardSession(db, interaction.message.id);
+      if (!session) {
+        await postError(interaction, 'This card session has expired.');
+        return;
       }
-      return;
+      if (session.user_id !== interaction.user.id) {
+        await postError(interaction, 'Only the worker who claimed this card can use these buttons.');
+        return;
+      }
+
+      const provider = listProviders(db).find((p) => p.id === session.provider_id) ?? {
+        id: session.provider_id,
+        name: session.provider_id,
+        zip: null,
+      };
+
+      const cardLast4 = session.last4;
+      if (action === 'used') {
+        await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'used' }));
+        closeCardSession(db, interaction.message.id);
+        logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card marked used');
+        return;
+      }
+      if (action === 'error') {
+        await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'error' }));
+        closeCardSession(db, interaction.message.id);
+        logger?.warn({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card flagged as error');
+        return;
+      }
+      if (action === 'return') {
+        await interaction.update(cardFinalEmbed({ last4: cardLast4, provider, action: 'returned' }));
+        if (returnCardToPool(db, session)) {
+          logger?.info({ userId: interaction.user.id, providerId: session.provider_id, cardLast4 }, 'card returned to pool');
+        }
+        return;
+      }
+    } finally {
+      updating.delete(messageId);
     }
   };
 }

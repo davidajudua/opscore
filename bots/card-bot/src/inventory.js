@@ -19,8 +19,10 @@ const sealedValues = (sealed) => SEALED_COLUMNS.map((col) => sealed[col]);
  * Open the card database, bring its schema up to date, and check that the
  * configured key can open the cards already in it.
  *
- * Scrub once per database and record completion in settings, retrying until it
- * succeeds. The truncating checkpoint removes old page images from the WAL.
+ * secure_delete zeros content deleted from now on; older claims and erases can
+ * leave plaintext in free pages. VACUUM rebuilds the file from live rows once per
+ * database, recorded as storage_scrubbed_at in settings and retried on the next
+ * start if it fails. The truncating checkpoint then empties the WAL.
  */
 export async function openInventory({ dbPath, migrationsDir, vault, logger }) {
   const db = openDb({ dbPath, logger });

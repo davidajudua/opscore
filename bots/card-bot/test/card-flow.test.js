@@ -171,11 +171,12 @@ for (const action of ['used', 'error', 'return']) {
       await cardHandler(ctx)(interaction());
       const press = interaction({ messageId: 'claim-msg' });
       press.update = async () => { throw new Error('Discord unavailable'); };
-      await assert.rejects(cardActionHandler(ctx)(press, [action]), /Discord unavailable/);
+      const handler = cardActionHandler(ctx);
+      await assert.rejects(handler(press, [action]), /Discord unavailable/);
       assert.ok(getCardSession(ctx.db, 'claim-msg'));
       assert.equal(cardCount(ctx.db, 'amex'), 1);
       const retry = interaction({ messageId: 'claim-msg' });
-      await cardActionHandler(ctx)(retry, [action]);
+      await handler(retry, [action]);
       assert.ok(visible(retry.sent[0]).includes('•••• 0005'));
       for (const secret of SECRETS) assert.ok(!visible(retry.sent[0]).includes(secret));
       assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
@@ -186,21 +187,32 @@ for (const action of ['used', 'error', 'return']) {
   });
 }
 
-test('concurrent Return presses restock exactly once', async () => {
-  const { ctx, logLines, cleanup } = await setup();
-  try {
-    await cardHandler(ctx)(interaction());
-    const presses = [interaction({ messageId: 'claim-msg' }), interaction({ messageId: 'claim-msg' })];
-    const releases = [];
-    for (const press of presses) press.update = () => new Promise((resolve) => releases.push(resolve));
-    const pending = presses.map((press) => cardActionHandler(ctx)(press, ['return']));
-    assert.equal(releases.length, 2);
-    releases.forEach((resolve) => resolve());
-    await Promise.all(pending);
-    assert.equal(cardCount(ctx.db, 'amex'), 2);
-    assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
-    assert.equal(logLines.filter((line) => line.includes('card returned to pool')).length, 1);
-  } finally {
-    cleanup();
-  }
-});
+for (const [first, second] of [['return', 'return'], ['used', 'return'], ['error', 'return'], ['return', 'used'], ['return', 'error']]) {
+  test(`concurrent ${first} and ${second} presses resolve only once`, async () => {
+    const { ctx, logLines, cleanup } = await setup();
+    try {
+      await cardHandler(ctx)(interaction());
+      const handler = cardActionHandler(ctx);
+      const winner = interaction({ messageId: 'claim-msg' });
+      const blocked = interaction({ messageId: 'claim-msg' });
+      let release;
+      winner.update = (payload) => {
+        winner.sent.push(payload);
+        return new Promise((resolve) => { release = resolve; });
+      };
+      const pending = [handler(winner, [first]), handler(blocked, [second])];
+      assert.ok(getCardSession(ctx.db, 'claim-msg'));
+      assert.equal(cardCount(ctx.db, 'amex'), 1);
+      assert.match(visible(blocked.sent[0]), /already being updated/);
+      assert.ok(blocked.sent[0].flags & 64, 'competing press gets an ephemeral reply');
+      release();
+      await Promise.all(pending);
+      assert.equal(cardCount(ctx.db, 'amex'), first === 'return' ? 2 : 1);
+      assert.equal(getCardSession(ctx.db, 'claim-msg'), undefined);
+      assert.match(visible(winner.sent[0]), first === 'return' ? /Returned/ : first === 'used' ? /Used/ : /Error/);
+      assert.equal(logLines.filter((line) => line.includes('card returned to pool')).length, first === 'return' ? 1 : 0);
+    } finally {
+      cleanup();
+    }
+  });
+}
