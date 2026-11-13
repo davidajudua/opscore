@@ -144,9 +144,9 @@ export function addProvider(db, { id, name, zip, expDate }) {
 }
 
 /**
- * Update mutable fields on a provider. Pass `newId` to rename — that updates
- * providers.id (the primary key) AND every cards.provider_id row pointing at
- * the old id, in a single transaction so the join never breaks. Renaming is a
+ * Update mutable fields on a provider. Pass `newId` to rename: that updates
+ * providers.id (the primary key) and every cards and card_sessions row pointing
+ * at the old id, in a single transaction so the join never breaks. Renaming is a
  * no-op when newId equals the current id.
  *
  * Returns { changed: bool, renamed: bool }.
@@ -155,9 +155,12 @@ export function editProvider(db, { id, newId, zip, expDate }) {
   const txn = db.transaction(() => {
     let renamed = false;
     if (newId && newId !== id) {
-      // Re-point the FK first, then move the providers row. Doing it in this
-      // order avoids momentarily orphaning cards rows.
+      // Between the two UPDATEs the cards point at an id no provider has yet.
+      // Deferring the foreign key check to COMMIT lets that pass.
+      db.run(`PRAGMA defer_foreign_keys = ON`);
       db.run(`UPDATE cards SET provider_id = ? WHERE provider_id = ?`, newId, id);
+      // Open claims follow too, so Return restocks into the renamed provider.
+      db.run(`UPDATE card_sessions SET provider_id = ? WHERE provider_id = ?`, newId, id);
       // Rename changes only the id (primary key). The human-readable name must be
       // preserved — binding newId to `name` here would overwrite it with the id.
       db.run(`UPDATE providers SET id = ? WHERE id = ?`, newId, id);

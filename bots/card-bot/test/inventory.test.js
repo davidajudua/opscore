@@ -14,6 +14,12 @@ import {
   fireAlert,
   isAlertFired,
   clearAlertsForPrefix,
+  loadCards,
+  claimCard,
+  cardCount,
+  openCardSession,
+  getCardSession,
+  returnCardToPool,
 } from '../src/inventory.js';
 
 const MIGRATIONS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
@@ -38,6 +44,22 @@ test('editProvider rename preserves the display name (does not overwrite it with
     const p = listProviders(db).find((x) => x.id === 'visa2');
     assert.ok(p, 'provider should now have the new id');
     assert.equal(p.name, 'Visa Classic', 'display name must be preserved, not replaced by the id');
+  }));
+
+test('renaming a provider moves its stock and open claims, and Return still works', () =>
+  withDb((db, vault) => {
+    addProvider(db, { id: 'amex', name: 'Amex' });
+    const card = { card_number: '378282246310005', mm: '09', yy: '2031', cvv: '7351' };
+    loadCards(db, vault, 'amex', [card, { ...card, card_number: '371449635398431' }]);
+    const claimed = claimCard(db, vault);
+    openCardSession(db, { messageId: 'm1', userId: 'u1', providerId: 'amex', sealed: claimed.sealed });
+
+    editProvider(db, { id: 'amex', newId: 'amexblue' });
+
+    assert.equal(cardCount(db, 'amexblue'), 1);
+    returnCardToPool(db, getCardSession(db, 'm1'));
+    assert.equal(cardCount(db, 'amexblue'), 2, 'the returned card lands in the renamed provider');
+    assert.deepEqual(claimCard(db, vault).card, { ...card, zip: null });
   }));
 
 test('clearAlertsForPrefix treats _ and % literally (no LIKE-wildcard over-deletion)', () =>
