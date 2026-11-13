@@ -21,7 +21,7 @@ const AMOUNT = String.raw`\$\s*([\d,]+(?:\.\d{1,2})?)`;
 const NAME = String.raw`([A-Z][A-Za-z'\-\.]*(?:\s+[A-Z][A-Za-z'\-\.]*){0,3})`;
 
 function cleanText(s) {
-  return s.replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
+  return s.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function toAmount(s) {

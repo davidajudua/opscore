@@ -188,27 +188,6 @@ function requireAdmin(env) {
 
 /* ============================================================== /card */
 
-function buildCardComponents(bot) {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(bot.customId('cardact', 'used'))
-      .setLabel('Used')
-      .setEmoji('✅')
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(bot.customId('cardact', 'error'))
-      .setLabel('Error')
-      .setEmoji('⚠️')
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
-      .setCustomId(bot.customId('cardact', 'return'))
-      .setLabel('Return')
-      .setEmoji('↩️')
-      .setStyle(ButtonStyle.Secondary),
-  );
-  return [row];
-}
-
 export function cardHandler({ db, vault, bot, logger, repoRoot }) {
   const openGate = requireOpen(repoRoot);
   const gate = requireFeature(db, 'card');
@@ -265,7 +244,7 @@ export function cardHandler({ db, vault, bot, logger, repoRoot }) {
   };
 }
 
-export function cardActionHandler({ db, bot, logger }) {
+export function cardActionHandler({ db, logger }) {
   return async function (interaction, args) {
     const [action] = args;
     const session = getCardSession(db, interaction.message.id);
@@ -578,7 +557,7 @@ export function providersHandler({ db, env, bot }) {
   };
 }
 
-export function providersButtonHandler({ db, env, bot, logger }) {
+export function providersButtonHandler({ db, env, bot }) {
   const gate = requireAdmin(env);
   return async function (interaction, args) {
     if (!(await gate(interaction))) return;
@@ -788,7 +767,7 @@ export function providersButtonHandler({ db, env, bot, logger }) {
   };
 }
 
-export function providersCreateModalHandler({ db, env, bot, logger }) {
+export function providersCreateModalHandler({ db, env, bot }) {
   const gate = requireAdmin(env);
   return async function (interaction) {
     if (!(await gate(interaction))) return;

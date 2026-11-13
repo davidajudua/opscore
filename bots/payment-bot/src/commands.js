@@ -519,7 +519,7 @@ export function refundModalHandler({ env, bot, logger }) {
   };
 }
 
-export function refundButtonHandler({ db, env, bot, logger, repoRoot }) {
+export function refundButtonHandler({ db, bot, logger, repoRoot }) {
   return async function (interaction, args) {
     const [action, method] = args;
     if (action !== 'approve' && action !== 'deny') return;

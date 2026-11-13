@@ -7,7 +7,7 @@ function makeDb(initial) {
   let rec = initial ? { ...initial } : null;
   return {
     cleared: false,
-    get(sql, provider) {
+    get(sql) {
       if (/FROM deploy_message/.test(sql)) return rec;
       return undefined;
     },
