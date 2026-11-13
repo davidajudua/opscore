@@ -64,7 +64,8 @@ export function createBotLogger({ botName, logDir, level } = {}) {
   const dir = logDir ?? path.join(process.cwd(), 'logs', botName);
   // Resolve the level at call time, not module-load time, so a LOG_LEVEL set by
   // loadEnvFiles() (which usually runs after this module is imported) is honored.
-  const lvl = level ?? process.env.LOG_LEVEL ?? 'info';
+  // An empty LOG_LEVEL= line counts as unset: pino throws on an empty level.
+  const lvl = level || process.env.LOG_LEVEL || 'info';
 
   const root = buildRootLogger({ botName, logDir: dir, level: lvl });
   rootLoggers.set(botName, root);

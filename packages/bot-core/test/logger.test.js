@@ -21,3 +21,9 @@ test('LOG_LEVEL set after module import is honored (level resolved at call time)
     // The dir lives under the OS tmp dir and is reclaimed by the system.
   }
 });
+
+test('an empty LOG_LEVEL, as in a copied .env template, falls back to info', () => {
+  const logDir = mkdtempSync(path.join(tmpdir(), 'oc-log-'));
+  const log = createBotLogger({ botName: `oc-test-empty-${process.pid}-${Date.now()}`, logDir, level: '' });
+  assert.equal(log.level, 'info');
+});
